@@ -429,8 +429,9 @@ void main() {
     vec3 c = texture2D(uCam, tc).rgb;
     c = clamp(uColor * c + uOff, 0.0, 1.0);
     if (uHasLogo > 0.5) {
-        // Sensor-Bildkoordinaten (y nach unten) -> aufrechtes Bild
-        vec2 img = vec2(vS.x, 1.0 - vS.y);
+        // Sensor-Bildkoordinaten -> aufrechtes Bild
+        // (auf dem Mate 20 Pro getestet: Sensor-x läuft entgegengesetzt)
+        vec2 img = vec2(1.0 - vS.x, 1.0 - vS.y);
         vec2 p = img;
         if (uRot > 45.0 && uRot < 135.0) {
             p = vec2(1.0 - img.y, img.x);
