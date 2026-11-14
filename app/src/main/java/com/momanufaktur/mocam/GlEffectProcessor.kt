@@ -430,8 +430,8 @@ void main() {
     c = clamp(uColor * c + uOff, 0.0, 1.0);
     if (uHasLogo > 0.5) {
         // Sensor-Bildkoordinaten -> aufrechtes Bild
-        // (auf dem Mate 20 Pro getestet: Sensor-x läuft entgegengesetzt)
-        vec2 img = vec2(1.0 - vS.x, 1.0 - vS.y);
+        // (auf dem Mate 20 Pro getestet: x läuft entgegengesetzt, y bereits nach unten)
+        vec2 img = vec2(1.0 - vS.x, vS.y);
         vec2 p = img;
         if (uRot > 45.0 && uRot < 135.0) {
             p = vec2(1.0 - img.y, img.x);
