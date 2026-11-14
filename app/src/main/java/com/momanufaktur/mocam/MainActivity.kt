@@ -21,6 +21,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -55,6 +56,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.util.Consumer
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -97,6 +99,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logoSwitch: SwitchCompat
     private lateinit var logoPhotosSwitch: SwitchCompat
     private lateinit var logoAlphaBar: SeekBar
+    private lateinit var logoLibrary: LinearLayout
+    private lateinit var btnPrompter: TextView
+    private lateinit var prompterBox: View
+    private lateinit var prompterView: TeleprompterView
+    private lateinit var prompterSpeed: SeekBar
+    private lateinit var btnPrompterPlay: TextView
 
     // ---------------- Zustand ----------------
     private lateinit var settings: Settings
@@ -181,6 +189,7 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         countdown?.cancel()
         countdownText.visibility = View.GONE
+        prompterView.playing = false
         recording?.stop()
     }
 
@@ -237,6 +246,12 @@ class MainActivity : AppCompatActivity() {
         logoSwitch = findViewById(R.id.logoSwitch)
         logoPhotosSwitch = findViewById(R.id.logoPhotosSwitch)
         logoAlphaBar = findViewById(R.id.logoAlphaBar)
+        logoLibrary = findViewById(R.id.logoLibrary)
+        btnPrompter = findViewById(R.id.btnPrompter)
+        prompterBox = findViewById(R.id.prompterBox)
+        prompterView = findViewById(R.id.prompterView)
+        prompterSpeed = findViewById(R.id.prompterSpeed)
+        btnPrompterPlay = findViewById(R.id.btnPrompterPlay)
     }
 
     private fun restoreSettings() {
@@ -374,6 +389,7 @@ class MainActivity : AppCompatActivity() {
             toast("Video-Ausrichtung des Logos: +${settings.logoRotOffset}°")
         }
 
+        setupPrompter()
         updateUi()
     }
 
@@ -641,6 +657,10 @@ class MainActivity : AppCompatActivity() {
         if (recording != null || videoMode == video) return
         videoMode = video
         settings.videoMode = video
+        if (!video) {
+            prompterView.playing = false
+            prompterBox.visibility = View.GONE
+        }
         flashMode = FLASH_OFF
         extensionMode = ExtensionMode.NONE
         updateUi()
@@ -668,6 +688,85 @@ class MainActivity : AppCompatActivity() {
         FLASH_AUTO -> ImageCapture.FLASH_MODE_AUTO
         else -> ImageCapture.FLASH_MODE_OFF
     }
+
+
+    // =====================================================================
+    // Teleprompter (nur Anzeige, wird nicht aufgezeichnet)
+    // =====================================================================
+
+    private fun setupPrompter() {
+        prompterView.text = settings.prompterText
+        prompterView.textSizeSp = settings.prompterTextSize
+        prompterSpeed.progress = settings.prompterSpeed
+        prompterView.speedDp = speedFromSlider(settings.prompterSpeed)
+
+        prompterView.onPlayingChanged = { playing -> btnPrompterPlay.text = if (playing) "⏸" else "▶" }
+
+        btnPrompter.setOnClickListener {
+            if (prompterBox.visibility == View.VISIBLE) {
+                prompterView.playing = false
+                prompterBox.visibility = View.GONE
+            } else {
+                prompterBox.visibility = View.VISIBLE
+                if (settings.prompterText.isBlank()) editPrompterText()
+            }
+            updateUi()
+        }
+        btnPrompterPlay.setOnClickListener { prompterView.playing = !prompterView.playing }
+        btnPrompterPlay.setOnLongClickListener {
+            prompterView.playing = false
+            prompterView.reset()
+            toast("Prompter an den Anfang gesetzt")
+            true
+        }
+        prompterSpeed.setOnSeekBarChangeListener(object : SimpleSeek() {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                prompterView.speedDp = speedFromSlider(progress)
+                if (fromUser) settings.prompterSpeed = progress
+            }
+        })
+        findViewById<View>(R.id.btnPrompterSmaller).setOnClickListener { changePrompterSize(-4f) }
+        findViewById<View>(R.id.btnPrompterBigger).setOnClickListener { changePrompterSize(4f) }
+        findViewById<View>(R.id.btnPrompterEdit).setOnClickListener { editPrompterText() }
+        findViewById<View>(R.id.btnPrompterClose).setOnClickListener {
+            prompterView.playing = false
+            prompterBox.visibility = View.GONE
+            updateUi()
+        }
+    }
+
+    /** Regler 0..100 -> 5..155 dp pro Sekunde */
+    private fun speedFromSlider(p: Int) = 5f + p * 1.5f
+
+    private fun changePrompterSize(delta: Float) {
+        prompterView.textSizeSp = prompterView.textSizeSp + delta
+        settings.prompterTextSize = prompterView.textSizeSp
+    }
+
+    private fun editPrompterText() {
+        val input = EditText(this).apply {
+            setText(settings.prompterText)
+            hint = "Dein Text für die Aufnahme …"
+            minLines = 6
+            maxLines = 14
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Prompter-Text")
+            .setView(input)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Übernehmen") { _, _ ->
+                val t = input.text.toString()
+                settings.prompterText = t
+                prompterView.playing = false
+                prompterView.text = t
+                prompterView.reset()
+            }
+            .show()
+    }
+
+    private fun prompterActive() = prompterBox.visibility == View.VISIBLE
 
     // =====================================================================
     // Aufnahme
@@ -778,10 +877,19 @@ class MainActivity : AppCompatActivity() {
             when (event) {
                 is VideoRecordEvent.Start -> {
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                    if (prompterActive()) prompterView.playing = true
                     updateUi()
                 }
-                is VideoRecordEvent.Pause -> { isPaused = true; updateUi() }
-                is VideoRecordEvent.Resume -> { isPaused = false; updateUi() }
+                is VideoRecordEvent.Pause -> {
+                    isPaused = true
+                    prompterView.playing = false
+                    updateUi()
+                }
+                is VideoRecordEvent.Resume -> {
+                    isPaused = false
+                    if (prompterActive()) prompterView.playing = true
+                    updateUi()
+                }
                 is VideoRecordEvent.Status -> {
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
                     recIndicator.text = String.format("%s %02d:%02d", if (isPaused) "❚❚" else "●", s / 60, s % 60)
@@ -790,6 +898,7 @@ class MainActivity : AppCompatActivity() {
                     sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
                     recording = null
                     isPaused = false
+                    prompterView.playing = false
                     if (!event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE) {
                         setLastMedia(event.outputResults.outputUri, true)
                         toast("Video gespeichert")
@@ -837,19 +946,41 @@ class MainActivity : AppCompatActivity() {
         overlay.editLogo = false
     }
 
-    private fun logoFile() = File(filesDir, "logo.png")
+    // ---------------- Logo-Bibliothek ----------------
+
+    private fun logoDir() = File(filesDir, "logos").apply { mkdirs() }
+
+    private fun libraryFiles(): List<File> =
+        (logoDir().listFiles { f -> f.name.endsWith(".png") } ?: emptyArray())
+            .sortedByDescending { it.lastModified() }
+
+    /** Übernimmt das Logo aus Version 1.0 (filesDir/logo.png) in die Bibliothek. */
+    private fun migrateOldLogo() {
+        val old = File(filesDir, "logo.png")
+        if (!old.exists()) return
+        val dst = File(logoDir(), "logo_${System.currentTimeMillis()}.png")
+        if (old.renameTo(dst) && settings.selectedLogo == null) settings.selectedLogo = dst.name
+    }
 
     private fun loadSavedLogo() {
-        val f = logoFile()
-        if (!f.exists()) return
         bg.execute {
-            val bmp = BitmapFactory.decodeFile(f.path)
-            runOnUiThread { if (bmp != null) applyLogo(bmp) }
+            migrateOldLogo()
+            val file = settings.selectedLogo?.let { File(logoDir(), it) }?.takeIf { it.exists() }
+                ?: libraryFiles().firstOrNull()
+            val bmp = file?.let { BitmapFactory.decodeFile(it.path) }
+            runOnUiThread {
+                if (file != null && bmp != null) {
+                    settings.selectedLogo = file.name
+                    applyLogo(bmp)
+                }
+                refreshLogoLibrary()
+            }
         }
     }
 
     private fun importLogo(uri: Uri) {
         bg.execute {
+            var savedName: String? = null
             val bmp = try {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -881,7 +1012,9 @@ class MainActivity : AppCompatActivity() {
                         b = c
                     }
                     val result: Bitmap = b
-                    logoFile().outputStream().use { result.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    val file = File(logoDir(), "logo_${System.currentTimeMillis()}.png")
+                    file.outputStream().use { result.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    savedName = file.name
                     result
                 }
             } catch (e: Exception) {
@@ -892,12 +1025,100 @@ class MainActivity : AppCompatActivity() {
                 if (bmp == null) {
                     toast("Logo konnte nicht geladen werden.")
                 } else {
+                    settings.selectedLogo = savedName
                     applyLogo(bmp)
-                    settings.logoEnabled = true
-                    processor.logoEnabled = true
-                    logoSwitch.isChecked = true
-                    toast("Logo geladen – jetzt im Bild platzieren.")
+                    enableLogo()
+                    refreshLogoLibrary()
+                    toast("Logo gespeichert – jetzt im Bild platzieren.")
                 }
+            }
+        }
+    }
+
+    private fun selectLogo(file: File) {
+        bg.execute {
+            val bmp = BitmapFactory.decodeFile(file.path)
+            runOnUiThread {
+                if (bmp == null) {
+                    toast("Logo konnte nicht geladen werden.")
+                    return@runOnUiThread
+                }
+                settings.selectedLogo = file.name
+                applyLogo(bmp)
+                enableLogo()
+                refreshLogoLibrary()
+            }
+        }
+    }
+
+    private fun confirmDeleteLogo(file: File) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Logo löschen?")
+            .setMessage("Das Logo wird aus der Schnellauswahl entfernt.")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Löschen") { _, _ ->
+                val wasSelected = file.name == settings.selectedLogo
+                file.delete()
+                if (wasSelected) {
+                    val next = libraryFiles().firstOrNull()
+                    if (next != null) {
+                        selectLogo(next)
+                    } else {
+                        settings.selectedLogo = null
+                        logoBitmap = null
+                        processor.setLogo(null)
+                        overlay.hasLogo = false
+                        refreshLogoLibrary()
+                    }
+                } else {
+                    refreshLogoLibrary()
+                }
+            }
+            .show()
+    }
+
+    private fun enableLogo() {
+        settings.logoEnabled = true
+        processor.logoEnabled = true
+        logoSwitch.isChecked = true
+    }
+
+    /** Baut die Vorschaubilder der gespeicherten Logos im Logo-Panel auf. */
+    private fun refreshLogoLibrary() {
+        bg.execute {
+            val thumbs = libraryFiles().map { f ->
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(f.path, bounds)
+                var sample = 1
+                while (max(bounds.outWidth, bounds.outHeight) / sample > 192) sample *= 2
+                f to BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            }
+            runOnUiThread {
+                logoLibrary.removeAllViews()
+                val size = dp(60)
+                val selected = settings.selectedLogo
+                thumbs.forEach { (file, thumb) ->
+                    val iv = ImageView(this).apply {
+                        setImageBitmap(thumb)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setPadding(dp(6), dp(6), dp(6), dp(6))
+                        setBackgroundResource(
+                            if (file.name == selected) R.drawable.logo_tile_selected else R.drawable.logo_tile
+                        )
+                        setOnClickListener { selectLogo(file) }
+                        setOnLongClickListener { confirmDeleteLogo(file); true }
+                    }
+                    logoLibrary.addView(iv, LinearLayout.LayoutParams(size, size).apply { marginEnd = dp(8) })
+                }
+                val add = TextView(this).apply {
+                    text = "+"
+                    textSize = 26f
+                    gravity = Gravity.CENTER
+                    setTextColor(Color.WHITE)
+                    setBackgroundResource(R.drawable.logo_tile)
+                    setOnClickListener { pickLogo.launch("image/*") }
+                }
+                logoLibrary.addView(add, LinearLayout.LayoutParams(size, size))
             }
         }
     }
@@ -969,6 +1190,8 @@ class MainActivity : AppCompatActivity() {
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
         btnExtension.text = "✨ " + extensionName(extensionMode)
         btnLogo.text = "🏷 Logo"
+        btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
+        btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE
 
         btnQuality.visibility = if (videoMode) View.VISIBLE else View.GONE
         btnAudio.visibility = if (videoMode) View.VISIBLE else View.GONE

@@ -58,6 +58,24 @@ class Settings(ctx: Context) {
         get() = float("logoAlpha", 1f)
         set(v) = p.edit().putFloat("logoAlpha", v).apply()
 
+    /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
+    var selectedLogo: String?
+        get() = p.getString("selectedLogo", null)
+        set(v) = p.edit().putString("selectedLogo", v).apply()
+
+    var prompterText: String
+        get() = p.getString("prompterText", "") ?: ""
+        set(v) = p.edit().putString("prompterText", v).apply()
+
+    /** Tempo-Regler 0..100 */
+    var prompterSpeed: Int
+        get() = int("prompterSpeed", 25)
+        set(v) = p.edit().putInt("prompterSpeed", v).apply()
+
+    var prompterTextSize: Float
+        get() = float("prompterTextSize", 28f)
+        set(v) = p.edit().putFloat("prompterTextSize", v).apply()
+
     /** Korrektur, falls das Logo im Video gedreht erscheint (0/90/180/270). */
     var logoRotOffset: Int
         get() = int("logoRotOffset", 0)

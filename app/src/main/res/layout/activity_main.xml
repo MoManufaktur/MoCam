@@ -16,6 +16,64 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+
+    <!-- Teleprompter: nur sichtbar, wird nicht aufgezeichnet -->
+    <LinearLayout
+        android:id="@+id/prompterBox"
+        android:layout_width="match_parent"
+        android:layout_height="300dp"
+        android:layout_gravity="top"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="64dp"
+        android:layout_marginEnd="8dp"
+        android:background="@drawable/prompter_bg"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <com.momanufaktur.mocam.TeleprompterView
+            android:id="@+id/prompterView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="6dp">
+
+            <TextView android:id="@+id/btnPrompterPlay" style="@style/TopChip" android:text="▶" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🐢"
+                android:textSize="16sp" />
+
+            <SeekBar
+                android:id="@+id/prompterSpeed"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:text="🐇"
+                android:textSize="16sp" />
+
+            <TextView android:id="@+id/btnPrompterSmaller" style="@style/TopChip" android:text="A−" />
+            <TextView android:id="@+id/btnPrompterBigger" style="@style/TopChip" android:text="A+" />
+            <TextView android:id="@+id/btnPrompterEdit" style="@style/TopChip" android:text="✎" />
+            <TextView android:id="@+id/btnPrompterClose" style="@style/TopChip" android:layout_marginEnd="0dp" android:text="✕" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Weißer Blitz beim Auslösen -->
     <View
         android:id="@+id/flashView"
@@ -66,6 +124,7 @@
                 <TextView android:id="@+id/btnAudio" style="@style/TopChip" />
                 <TextView android:id="@+id/btnExtension" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLogo" style="@style/TopChip" />
+                <TextView android:id="@+id/btnPrompter" style="@style/TopChip" />
             </LinearLayout>
         </HorizontalScrollView>
 
@@ -281,6 +340,27 @@
             android:textColor="#CCFFFFFF"
             android:textSize="13sp" />
 
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/logoLibrary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Antippen = auswählen · lange drücken = löschen"
+            android:textColor="#88FFFFFF"
+            android:textSize="11sp" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -292,7 +372,7 @@
                 android:id="@+id/btnPickLogo"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Logo wählen…" />
+                android:text="+ Neues Logo" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/logoSwitch"
