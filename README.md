@@ -60,3 +60,7 @@ Spätere Builds sind mit demselben Schlüssel signiert und lassen sich deshalb e
 Kotlin, CameraX 1.4 (Preview, ImageCapture, VideoCapture, Extensions). Filter und Logo laufen über einen
 eigenen OpenGL-ES-Shader (`GlEffectProcessor`) als `CameraEffect` auf Vorschau und Videoencoder.
 Für Fotos wird dieselbe Farbmatrix per `ColorMatrix` angewendet.
+
+## Unterstützen
+Dir gefällt MoCam? Über eine kleine Spende freue ich mich:
+[**Spenden mit PayPal**](https://www.paypal.com/donate/?hosted_button_id=PFE8KWFRX3F7S)
