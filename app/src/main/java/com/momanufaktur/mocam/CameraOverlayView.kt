@@ -42,6 +42,13 @@ class CameraOverlayView @JvmOverloads constructor(
     var logoAspect = 1f
         set(v) { field = v; invalidate() }
 
+    /** Logo zusätzlich in der Ebene zeichnen (wenn die Kamera-Vorschau es nicht selbst zeigt). */
+    var drawLogoPreview = false
+        set(v) { field = v; invalidate() }
+    var logoBitmap: android.graphics.Bitmap? = null
+        set(v) { field = v; invalidate() }
+    private val logoPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+
     var logoCx = 0.8f
     var logoCy = 0.1f
     var logoW = 0.3f
@@ -127,16 +134,11 @@ class CameraOverlayView @JvmOverloads constructor(
             }
         }
         if (editLogo) {
-            if (hasLogo) {
-                val r = logoScreenRect(RectF())
-                canvas.drawRect(r, framePaint)
-                val hs = 6f * density
-                canvas.drawCircle(r.left, r.top, hs, handlePaint)
-                canvas.drawCircle(r.right, r.top, hs, handlePaint)
-                canvas.drawCircle(r.left, r.bottom, hs, handlePaint)
-                canvas.drawCircle(r.right, r.bottom, hs, handlePaint)
-            } else {
+            if (!hasLogo) {
                 canvas.drawText("Bitte zuerst ein Logo wählen", width / 2f, height / 3f, textPaint)
+            } else if (drawLogoPreview) {
+                // Nur falls die Live-Vorschau kein Logo zeigt (z. B. Huawei-Modus): Logo selbst einblenden
+                logoBitmap?.let { canvas.drawBitmap(it, null, logoScreenRect(RectF()), logoPaint) }
             }
         }
         if (SystemClock.uptimeMillis() < focusUntil) {

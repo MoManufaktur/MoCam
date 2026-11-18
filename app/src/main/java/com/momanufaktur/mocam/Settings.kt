@@ -67,6 +67,11 @@ class Settings(ctx: Context) {
         get() = int("photoFormat", 1)
         set(v) = p.edit().putInt("photoFormat", v).apply()
 
+    /** Frontkamera gespiegelt (wie Spiegel) oder ungespiegelt aufnehmen/anzeigen. */
+    var frontMirror: Boolean
+        get() = bool("frontMirror", false)
+        set(v) = p.edit().putBoolean("frontMirror", v).apply()
+
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?
         get() = p.getString("selectedLogo", null)

@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnExtension: TextView
     private lateinit var btnLogo: TextView
     private lateinit var btnFormat: TextView
+    private lateinit var btnMirror: TextView
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -246,6 +247,7 @@ class MainActivity : AppCompatActivity() {
         btnExtension = findViewById(R.id.btnExtension)
         btnLogo = findViewById(R.id.btnLogo)
         btnFormat = findViewById(R.id.btnFormat)
+        btnMirror = findViewById(R.id.btnMirror)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -340,6 +342,12 @@ class MainActivity : AppCompatActivity() {
             bindCamera()
         }
         btnLogo.setOnClickListener { openLogoPanel() }
+        btnMirror.setOnClickListener {
+            settings.frontMirror = !settings.frontMirror
+            processor.frontMirror = settings.frontMirror
+            toast(if (settings.frontMirror) "Frontkamera: gespiegelt (wie ein Spiegel)" else "Frontkamera: ungespiegelt (wie andere dich sehen)")
+            updateUi()
+        }
         btnFormat.setOnClickListener {
             if (recording != null) return@setOnClickListener
             val next = (formats.indexOf(currentFormat()) + 1) % formats.size
@@ -509,6 +517,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { 90 }
         overlay.mirrorX = false
         processor.isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
+        processor.frontMirror = settings.frontMirror
         val fmt = currentFormat()
         overlay.contentAspect = fmt.w.toFloat() / fmt.h
         applyRotation()
@@ -609,7 +618,34 @@ class MainActivity : AppCompatActivity() {
             return
         }
         setupCameraControls(bound)
+        overlay.drawLogoPreview = !effectActive
+        schedulePreviewMirrorCheck()
         updateUi()
+    }
+
+    /**
+     * Manche Android-Versionen spiegeln die Selfie-Vorschau zusätzlich in der Anzeige (PreviewView).
+     * Das wird hier erkannt und rückgängig gemacht – die Spiegelung steuert ausschließlich MoCam.
+     */
+    private fun schedulePreviewMirrorCheck() {
+        listOf(300L, 1000L, 2500L).forEach { previewView.postDelayed({ checkPreviewMirror() }, it) }
+    }
+
+    private fun findTextureView(v: View): android.view.TextureView? {
+        if (v is android.view.TextureView) return v
+        if (v is android.view.ViewGroup) {
+            for (i in 0 until v.childCount) findTextureView(v.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
+    private fun checkPreviewMirror() {
+        val tv = findTextureView(previewView) ?: return
+        val values = FloatArray(9)
+        tv.getTransform(null).getValues(values)
+        val det = values[0] * values[4] - values[1] * values[3]
+        val mirrored = det * tv.scaleX * tv.scaleY < 0f
+        previewView.scaleX = if (mirrored) -1f else 1f
     }
 
     private fun tryBind(provider: ProcessCameraProvider, selector: CameraSelector, group: UseCaseGroup): Camera? =
@@ -676,7 +712,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
-        val point = previewView.meteringPointFactory.createPoint(x, y)
+        // PreviewView ist ggf. horizontal zurückgespiegelt -> Tippen entsprechend umrechnen
+        val px = if (previewView.scaleX < 0f) previewView.width - x else x
+        val point = previewView.meteringPointFactory.createPoint(px, y)
         val action = FocusMeteringAction.Builder(
             point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
         ).setAutoCancelDuration(4, TimeUnit.SECONDS).build()
@@ -690,6 +728,7 @@ class MainActivity : AppCompatActivity() {
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         extensionMode = ExtensionMode.NONE
+        if (logoPanel.visibility == View.VISIBLE) closeLogoPanel()
         bindCamera()
     }
 
@@ -851,7 +890,9 @@ class MainActivity : AppCompatActivity() {
         val filter = processor.filter
         val logo = if (settings.logoEnabled && settings.logoOnPhotos) logoBitmap else null
         val needsProcessing = !filter.isIdentity || logo != null
-        val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
+        val meta = ImageCapture.Metadata().apply {
+            isReversedHorizontal = lensFacing == CameraSelector.LENS_FACING_FRONT && settings.frontMirror
+        }
 
         flashScreen()
         sound.play(MediaActionSound.SHUTTER_CLICK)
@@ -975,6 +1016,17 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun openLogoPanel() {
+        // Logo wird ausschließlich mit der Rückkamera platziert
+        if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+            if (recording != null) {
+                toast("Logo bitte vor der Aufnahme mit der Rückkamera platzieren.")
+                return
+            }
+            lensFacing = CameraSelector.LENS_FACING_BACK
+            extensionMode = ExtensionMode.NONE
+            bindCamera()
+            toast("Logo wird mit der Rückkamera platziert – gilt für beide Kameras.")
+        }
         bottomPanel.visibility = View.GONE
         logoPanel.visibility = View.VISIBLE
         overlay.editLogo = true
@@ -1177,6 +1229,7 @@ class MainActivity : AppCompatActivity() {
         logoBitmap = bmp
         processor.setLogo(bmp)
         overlay.logoAspect = bmp.height.toFloat() / bmp.width
+        overlay.logoBitmap = bmp
         overlay.hasLogo = true
     }
 
@@ -1241,6 +1294,8 @@ class MainActivity : AppCompatActivity() {
         btnExtension.text = "✨ " + extensionName(extensionMode)
         btnLogo.text = "🏷 Logo"
         btnFormat.text = "▭ " + currentFormat().label
+        btnMirror.text = if (settings.frontMirror) "🪞 Spiegeln an" else "🪞 Spiegeln aus"
+        btnMirror.visibility = if (lensFacing == CameraSelector.LENS_FACING_FRONT) View.VISIBLE else View.GONE
         btnFormat.alpha = if (rec) 0.4f else 1f
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
         btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE
