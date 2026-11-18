@@ -23,6 +23,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.concurrent.Executor
+import kotlin.math.abs
 
 /**
  * OpenGL-Pipeline zwischen Kamera und Ausgaben (Vorschau + Videoencoder).
@@ -76,6 +77,8 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uRot = 0
     private var uRect = 0
     private var uAlpha = 0
+    private var uPMin = 0
+    private var uPRange = 0
     private var logoTex = 0
 
     private class Input(val st: SurfaceTexture, val surface: Surface, val tex: Int, val w: Int, val h: Int)
@@ -219,13 +222,13 @@ class GlEffectProcessor : SurfaceProcessor {
             if (!EGL14.eglMakeCurrent(display, egl, egl, context)) continue
             out.updateTransformMatrix(addMatrix, identity)
             GLES20.glViewport(0, 0, out.size.width, out.size.height)
-            draw(holder)
+            draw(holder, out)
             EGLExt.eglPresentationTimeANDROID(display, egl, timestamp)
             EGL14.eglSwapBuffers(display, egl)
         }
     }
 
-    private fun draw(holder: Input) {
+    private fun draw(holder: Input, out: SurfaceOutput) {
         GLES20.glUseProgram(program)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -250,10 +253,31 @@ class GlEffectProcessor : SurfaceProcessor {
         val show = logoEnabled && hasLogo
         GLES20.glUniform1f(uHasLogo, if (show) 1f else 0f)
         if (show) {
-            // Seitenverhältnis (B/H) des aufrechten Bildes
-            val upright = if (rot % 180 != 0) holder.h.toFloat() / holder.w else holder.w.toFloat() / holder.h
+            // Sichtbaren Bildausschnitt dieser Ausgabe im aufrechten Koordinatensystem bestimmen.
+            // Damit bezieht sich die Logo-Position immer auf das Format (9:16, 1:1 …),
+            // und das Seitenverhältnis wird in echten Pixeln der Ausgabe berechnet.
+            val p00 = uprightAt(0f, 0f, rot)
+            val p10 = uprightAt(1f, 0f, rot)
+            val p01 = uprightAt(0f, 1f, rot)
+            val p11x = p10[0] + p01[0] - p00[0]
+            val p11y = p10[1] + p01[1] - p00[1]
+            val minX = minOf(minOf(p00[0], p10[0]), minOf(p01[0], p11x))
+            val maxX = maxOf(maxOf(p00[0], p10[0]), maxOf(p01[0], p11x))
+            val minY = minOf(minOf(p00[1], p10[1]), minOf(p01[1], p11y))
+            val maxY = maxOf(maxOf(p00[1], p10[1]), maxOf(p01[1], p11y))
+            val rangeX = (maxX - minX).coerceAtLeast(1e-4f)
+            val rangeY = (maxY - minY).coerceAtLeast(1e-4f)
+
+            // Läuft die Ausgabe-Breite (u) entlang der aufrechten x-Achse?
+            val uAlongX = abs(p10[0] - p00[0]) >= abs(p10[1] - p00[1])
+            val upW = if (uAlongX) out.size.width else out.size.height
+            val upH = if (uAlongX) out.size.height else out.size.width
+            val upright = upW.toFloat() / upH.toFloat()
+
             val w = logoW
             val h = w * logoAspect * upright
+            GLES20.glUniform2f(uPMin, minX, minY)
+            GLES20.glUniform2f(uPRange, rangeX, rangeY)
             GLES20.glUniform4f(uRect, logoCx - w / 2f, logoCy - h / 2f, w, h)
             GLES20.glUniform1f(uAlpha, logoAlpha)
         }
@@ -265,6 +289,22 @@ class GlEffectProcessor : SurfaceProcessor {
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aUv)
+    }
+
+    /**
+     * Gleiche Abbildung wie im Shader: Ausgabe-Koordinate (u, v) -> aufrechtes Bild (0..1).
+     */
+    private fun uprightAt(u: Float, v: Float, rot: Int): FloatArray {
+        val sx = addMatrix[0] * u + addMatrix[4] * v + addMatrix[12]
+        val sy = addMatrix[1] * u + addMatrix[5] * v + addMatrix[13]
+        val ix = 1f - sx
+        val iy = sy
+        return when {
+            rot in 46..134 -> floatArrayOf(1f - iy, ix)
+            rot in 135..224 -> floatArrayOf(1f - ix, 1f - iy)
+            rot >= 225 -> floatArrayOf(iy, 1f - ix)
+            else -> floatArrayOf(ix, iy)
+        }
     }
 
     // ------------------------------------------------------------------
@@ -318,6 +358,8 @@ class GlEffectProcessor : SurfaceProcessor {
         uRot = GLES20.glGetUniformLocation(program, "uRot")
         uRect = GLES20.glGetUniformLocation(program, "uRect")
         uAlpha = GLES20.glGetUniformLocation(program, "uAlpha")
+        uPMin = GLES20.glGetUniformLocation(program, "uPMin")
+        uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
         val t = IntArray(1)
         GLES20.glGenTextures(1, t, 0)
@@ -423,6 +465,8 @@ uniform vec3 uOff;
 uniform float uHasLogo;
 uniform float uRot;
 uniform vec4 uRect;
+uniform vec2 uPMin;
+uniform vec2 uPRange;
 uniform float uAlpha;
 void main() {
     vec2 tc = (uTex * vec4(vS, 0.0, 1.0)).xy;
@@ -440,7 +484,8 @@ void main() {
         } else if (uRot >= 225.0) {
             p = vec2(img.y, 1.0 - img.x);
         }
-        vec2 luv = (p - uRect.xy) / uRect.zw;
+        vec2 q = (p - uPMin) / uPRange;
+        vec2 luv = (q - uRect.xy) / uRect.zw;
         if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
             vec4 l = texture2D(uLogo, luv);
             float a = l.a * uAlpha;

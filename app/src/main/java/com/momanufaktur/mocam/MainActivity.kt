@@ -15,10 +15,12 @@ import android.os.Bundle
 import android.os.CountDownTimer
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Rational
 import android.util.Size
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.Surface
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
@@ -39,6 +41,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -82,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAudio: TextView
     private lateinit var btnExtension: TextView
     private lateinit var btnLogo: TextView
+    private lateinit var btnFormat: TextView
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -135,6 +139,21 @@ class MainActivity : AppCompatActivity() {
     private var zoomBarTracking = false
     private var filterViews = mutableListOf<TextView>()
 
+    /** Bildformate (Breite:Höhe im Hochformat). */
+    private class Format(val label: String, val w: Int, val h: Int, val wide: Boolean, val isDefault: Boolean = false)
+
+    private val formats = listOf(
+        Format("9:16", 9, 16, wide = true, isDefault = true),
+        Format("3:4", 3, 4, wide = false, isDefault = true),
+        Format("4:5", 4, 5, wide = false),
+        Format("1:1", 1, 1, wide = false)
+    )
+
+    private fun currentFormat(): Format {
+        val i = if (videoMode) settings.videoFormat else settings.photoFormat
+        return formats.getOrElse(i) { if (videoMode) formats[0] else formats[1] }
+    }
+
     private val qualities = listOf(
         Quality.UHD to "4K",
         Quality.FHD to "1080p",
@@ -175,12 +194,7 @@ class MainActivity : AppCompatActivity() {
         loadSavedLogo()
         sound.load(MediaActionSound.SHUTTER_CLICK)
 
-        processor.onInputSize = { w, h ->
-            runOnUiThread {
-                overlay.contentAspect =
-                    if (sensorRotation % 180 != 0) h.toFloat() / w else w.toFloat() / h
-            }
-        }
+        // Seitenverhältnis der Vorschau kommt aus dem gewählten Format
 
         if (hasAllPermissions()) startCamera() else permissionLauncher.launch(requiredPermissions())
     }
@@ -229,6 +243,7 @@ class MainActivity : AppCompatActivity() {
         btnAudio = findViewById(R.id.btnAudio)
         btnExtension = findViewById(R.id.btnExtension)
         btnLogo = findViewById(R.id.btnLogo)
+        btnFormat = findViewById(R.id.btnFormat)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -323,6 +338,13 @@ class MainActivity : AppCompatActivity() {
             bindCamera()
         }
         btnLogo.setOnClickListener { openLogoPanel() }
+        btnFormat.setOnClickListener {
+            if (recording != null) return@setOnClickListener
+            val next = (formats.indexOf(currentFormat()) + 1) % formats.size
+            if (videoMode) settings.videoFormat = next else settings.photoFormat = next
+            updateUi()
+            bindCamera()
+        }
 
         // Belichtung
         exposureBar.setOnSeekBarChangeListener(object : SimpleSeek() {
@@ -482,7 +504,8 @@ class MainActivity : AppCompatActivity() {
                 ?.sensorRotationDegrees ?: 90
         } catch (e: Exception) { 90 }
         overlay.mirrorX = lensFacing == CameraSelector.LENS_FACING_FRONT
-        overlay.contentAspect = if (videoMode) 9f / 16f else 3f / 4f
+        val fmt = currentFormat()
+        overlay.contentAspect = fmt.w.toFloat() / fmt.h
         applyRotation()
 
         // Verfügbare Hersteller-Modi (Huawei: HDR, Nacht, Bokeh, Beauty …)
@@ -495,35 +518,47 @@ class MainActivity : AppCompatActivity() {
         }
         if (extensionMode !in availableExtensions) extensionMode = ExtensionMode.NONE
 
-        val ratioStrategy = if (videoMode)
+        // Format: 9:16 nutzt den 16:9-Sensorstrom, alle anderen den volleren 4:3-Strom
+        val ratioStrategy = if (fmt.wide)
             AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
         else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+        val viewPort = ViewPort.Builder(Rational(fmt.w, fmt.h), Surface.ROTATION_0).build()
 
         val preview = Preview.Builder()
             .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratioStrategy).build())
             .build()
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
+        /** Baut eine UseCaseGroup mit/ohne Effekt und mit/ohne Bildausschnitt. */
+        fun group(effectTargets: Int, withViewPort: Boolean, vararg cases: androidx.camera.core.UseCase): UseCaseGroup {
+            val b = UseCaseGroup.Builder()
+            cases.forEach { b.addUseCase(it) }
+            if (effectTargets != 0) b.addEffect(FxEffect(effectTargets, processor))
+            if (withViewPort) b.setViewPort(viewPort)
+            return b.build()
+        }
+
         var bound: Camera? = null
         if (videoMode) {
             val q = qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].first
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(q, FallbackStrategy.lowerQualityOrHigherThan(q)))
-                .setAspectRatio(AspectRatio.RATIO_16_9)
+                .setAspectRatio(if (fmt.wide) AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3)
                 .build()
             val vc = VideoCapture.withOutput(recorder)
             videoCapture = vc
+            val fx = CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE
 
-            val withEffect = UseCaseGroup.Builder()
-                .addUseCase(preview).addUseCase(vc)
-                .addEffect(FxEffect(CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE, processor))
-                .build()
-            bound = tryBind(provider, base, withEffect)
+            bound = tryBind(provider, base, group(fx, true, preview, vc))
+            if (bound == null && !fmt.isDefault) {
+                bound = tryBind(provider, base, group(fx, false, preview, vc))
+                if (bound != null) toast("Format ${fmt.label} wird hier nicht unterstützt – 9:16/3:4 aktiv.")
+            }
             effectActive = bound != null
             if (bound == null) {
                 toast("Filter/Logo-Effekt wird von diesem Gerät nicht unterstützt.")
-                bound = tryBind(provider, base,
-                    UseCaseGroup.Builder().addUseCase(preview).addUseCase(vc).build())
+                bound = tryBind(provider, base, group(0, true, preview, vc))
+                    ?: tryBind(provider, base, group(0, false, preview, vc))
             }
         } else {
             val ic = ImageCapture.Builder()
@@ -545,22 +580,19 @@ class MainActivity : AppCompatActivity() {
             val selector = if (extensionMode != ExtensionMode.NONE && em != null)
                 em.getExtensionEnabledCameraSelector(base, extensionMode) else base
 
-            bound = tryBind(provider, selector, UseCaseGroup.Builder()
-                .addUseCase(preview).addUseCase(ic)
-                .addEffect(FxEffect(CameraEffect.PREVIEW, processor))
-                .build())
+            bound = tryBind(provider, selector, group(CameraEffect.PREVIEW, true, preview, ic))
+                ?: tryBind(provider, selector, group(CameraEffect.PREVIEW, false, preview, ic))
             effectActive = bound != null
             if (bound == null) {
-                bound = tryBind(provider, selector,
-                    UseCaseGroup.Builder().addUseCase(preview).addUseCase(ic).build())
+                bound = tryBind(provider, selector, group(0, true, preview, ic))
+                    ?: tryBind(provider, selector, group(0, false, preview, ic))
                 if (bound != null && extensionMode != ExtensionMode.NONE) {
                     toast("${extensionName(extensionMode)}: Live-Filter aus, Filter/Logo kommen beim Speichern dazu.")
                 }
             }
             if (bound == null && selector != base) {
                 extensionMode = ExtensionMode.NONE
-                bound = tryBind(provider, base,
-                    UseCaseGroup.Builder().addUseCase(preview).addUseCase(ic).build())
+                bound = tryBind(provider, base, group(0, false, preview, ic))
             }
         }
 
@@ -1190,6 +1222,8 @@ class MainActivity : AppCompatActivity() {
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
         btnExtension.text = "✨ " + extensionName(extensionMode)
         btnLogo.text = "🏷 Logo"
+        btnFormat.text = "▭ " + currentFormat().label
+        btnFormat.alpha = if (rec) 0.4f else 1f
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
         btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE
 

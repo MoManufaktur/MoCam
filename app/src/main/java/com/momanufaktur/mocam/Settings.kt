@@ -58,6 +58,15 @@ class Settings(ctx: Context) {
         get() = float("logoAlpha", 1f)
         set(v) = p.edit().putFloat("logoAlpha", v).apply()
 
+    /** Index in der Formatliste (0 = 9:16, 1 = 3:4, 2 = 4:5, 3 = 1:1) */
+    var videoFormat: Int
+        get() = int("videoFormat", 0)
+        set(v) = p.edit().putInt("videoFormat", v).apply()
+
+    var photoFormat: Int
+        get() = int("photoFormat", 1)
+        set(v) = p.edit().putInt("photoFormat", v).apply()
+
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?
         get() = p.getString("selectedLogo", null)
