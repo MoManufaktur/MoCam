@@ -48,6 +48,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.ExperimentalPersistentRecording
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
@@ -133,6 +134,7 @@ class MainActivity : AppCompatActivity() {
     private var availableExtensions = listOf(ExtensionMode.NONE)
     private var sensorRotation = 90
     private var logoBitmap: Bitmap? = null
+    private var logoOriginal: Bitmap? = null
     private var lastMediaUri: Uri? = null
     private var lastMediaIsVideo = false
     private var countdown: CountDownTimer? = null
@@ -406,9 +408,8 @@ class MainActivity : AppCompatActivity() {
             overlay.invalidate()
         }
         findViewById<View>(R.id.btnLogoRotate).setOnClickListener {
-            settings.logoRotOffset = (settings.logoRotOffset + 90) % 360
-            applyRotation()
-            toast("Video-Ausrichtung des Logos: +${settings.logoRotOffset}°")
+            settings.logoRotation = (settings.logoRotation + 90) % 360
+            logoOriginal?.let { applyLogo(it) }
         }
 
         setupPrompter()
@@ -484,7 +485,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindCamera() {
         val provider = cameraProvider ?: return
-        if (recording != null) return
+        // Während der Aufnahme nur Kamerawechsel erlaubt – dabei dieselbe VideoCapture weiterverwenden
+        val keepVideo = recording != null
+        if (keepVideo && (!videoMode || videoCapture == null)) return
+        val runningVc = if (keepVideo) videoCapture else null
 
         camera?.cameraInfo?.zoomState?.removeObservers(this)
         provider.unbindAll()
@@ -503,7 +507,8 @@ class MainActivity : AppCompatActivity() {
             provider.availableCameraInfos.firstOrNull { base.filter(listOf(it)).isNotEmpty() }
                 ?.sensorRotationDegrees ?: 90
         } catch (e: Exception) { 90 }
-        overlay.mirrorX = lensFacing == CameraSelector.LENS_FACING_FRONT
+        overlay.mirrorX = false
+        processor.isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
         val fmt = currentFormat()
         overlay.contentAspect = fmt.w.toFloat() / fmt.h
         applyRotation()
@@ -540,12 +545,14 @@ class MainActivity : AppCompatActivity() {
 
         var bound: Camera? = null
         if (videoMode) {
-            val q = qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].first
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(q, FallbackStrategy.lowerQualityOrHigherThan(q)))
-                .setAspectRatio(if (fmt.wide) AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3)
-                .build()
-            val vc = VideoCapture.withOutput(recorder)
+            val vc = runningVc ?: run {
+                val q = qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].first
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(q, FallbackStrategy.lowerQualityOrHigherThan(q)))
+                    .setAspectRatio(if (fmt.wide) AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3)
+                    .build()
+                VideoCapture.withOutput(recorder)
+            }
             videoCapture = vc
             val fx = CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE
 
@@ -615,7 +622,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun applyRotation() {
-        processor.rotationDegrees = (sensorRotation + settings.logoRotOffset) % 360
+        processor.rotationDegrees = sensorRotation
     }
 
     private fun setupCameraControls(cam: Camera) {
@@ -678,7 +685,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun switchCamera() {
-        if (recording != null) return
+        // Während einer Videoaufnahme läuft die Aufnahme weiter (Persistent Recording)
+        if (recording != null && !videoMode) return
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         extensionMode = ExtensionMode.NONE
@@ -895,12 +903,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("MissingPermission")
+    @androidx.annotation.OptIn(ExperimentalPersistentRecording::class)
     private fun startRecording() {
         val vc = videoCapture ?: return
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
             .build()
-        var pending = vc.output.prepareRecording(this, opts)
+        // Persistent: Aufnahme läuft beim Kamerawechsel (vorne/hinten) einfach weiter
+        var pending = vc.output.prepareRecording(this, opts).asPersistentRecording()
         if (settings.audio && granted(Manifest.permission.RECORD_AUDIO)) {
             pending = pending.withAudioEnabled()
         }
@@ -1098,6 +1108,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         settings.selectedLogo = null
                         logoBitmap = null
+                        logoOriginal = null
                         processor.setLogo(null)
                         overlay.hasLogo = false
                         refreshLogoLibrary()
@@ -1155,7 +1166,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun applyLogo(bmp: Bitmap) {
+    /** Übernimmt ein Logo und dreht es um die gespeicherte Drehung (gilt für Video, Vorschau und Fotos). */
+    private fun applyLogo(original: Bitmap) {
+        logoOriginal = original
+        val deg = settings.logoRotation
+        val bmp = if (deg == 0) original else {
+            val m = android.graphics.Matrix().apply { postRotate(deg.toFloat()) }
+            Bitmap.createBitmap(original, 0, 0, original.width, original.height, m, true)
+        }
         logoBitmap = bmp
         processor.setLogo(bmp)
         overlay.logoAspect = bmp.height.toFloat() / bmp.width
@@ -1236,7 +1254,7 @@ class MainActivity : AppCompatActivity() {
         btnPause.visibility = if (rec) View.VISIBLE else View.GONE
         btnPause.text = if (isPaused) "▶" else "⏸"
         galleryThumb.visibility = if (rec) View.GONE else View.VISIBLE
-        btnSwitch.alpha = if (rec) 0.3f else 1f
+        btnSwitch.alpha = 1f
         modePhoto.alpha = if (rec) 0.3f else 1f
         modeVideo.alpha = if (rec) 0.3f else 1f
         topBar.alpha = if (rec) 0.6f else 1f

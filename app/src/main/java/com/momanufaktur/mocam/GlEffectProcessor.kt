@@ -52,6 +52,10 @@ class GlEffectProcessor : SurfaceProcessor {
     @Volatile var logoAlpha = 1f
     /** Drehung Sensor -> aufrechtes Bild (meist 90 hinten, 270 vorne). */
     @Volatile var rotationDegrees = 90
+    /** Frontkamera aktiv (Vorschau ist dann gespiegelt). */
+    @Volatile var isFront = false
+    /** Vorzeichen der Abbildung für ungespiegelte Ausgaben – wird an der Rückkamera gelernt. */
+    private var unmirroredSign = -1f
 
     @Volatile private var logoAspect = 1f // Höhe / Breite
     @Volatile private var hasLogo = false
@@ -78,6 +82,7 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uRect = 0
     private var uAlpha = 0
     private var uPMin = 0
+    private var uMirror = 0
     private var uPRange = 0
     private var logoTex = 0
 
@@ -265,6 +270,13 @@ class GlEffectProcessor : SurfaceProcessor {
             val maxX = maxOf(maxOf(p00[0], p10[0]), maxOf(p01[0], p11x))
             val minY = minOf(minOf(p00[1], p10[1]), minOf(p01[1], p11y))
             val maxY = maxOf(maxOf(p00[1], p10[1]), maxOf(p01[1], p11y))
+            // Gespiegelte Ausgabe (Selfie-Vorschau)? -> Logo im angezeigten Bild platzieren,
+            // damit es überall an derselben Stelle und richtig herum erscheint.
+            val det = (p10[0] - p00[0]) * (p01[1] - p00[1]) - (p10[1] - p00[1]) * (p01[0] - p00[0])
+            val sign = if (det >= 0f) 1f else -1f
+            if (!isFront) unmirroredSign = sign
+            val mirrored = isFront && sign != unmirroredSign
+            GLES20.glUniform1f(uMirror, if (mirrored) 1f else 0f)
             val rangeX = (maxX - minX).coerceAtLeast(1e-4f)
             val rangeY = (maxY - minY).coerceAtLeast(1e-4f)
 
@@ -359,6 +371,7 @@ class GlEffectProcessor : SurfaceProcessor {
         uRect = GLES20.glGetUniformLocation(program, "uRect")
         uAlpha = GLES20.glGetUniformLocation(program, "uAlpha")
         uPMin = GLES20.glGetUniformLocation(program, "uPMin")
+        uMirror = GLES20.glGetUniformLocation(program, "uMirror")
         uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
         val t = IntArray(1)
@@ -466,6 +479,7 @@ uniform float uHasLogo;
 uniform float uRot;
 uniform vec4 uRect;
 uniform vec2 uPMin;
+uniform float uMirror;
 uniform vec2 uPRange;
 uniform float uAlpha;
 void main() {
@@ -485,6 +499,7 @@ void main() {
             p = vec2(img.y, 1.0 - img.x);
         }
         vec2 q = (p - uPMin) / uPRange;
+        if (uMirror > 0.5) q.x = 1.0 - q.x;
         vec2 luv = (q - uRect.xy) / uRect.zw;
         if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
             vec4 l = texture2D(uLogo, luv);

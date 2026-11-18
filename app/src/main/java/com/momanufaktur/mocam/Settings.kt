@@ -85,8 +85,8 @@ class Settings(ctx: Context) {
         get() = float("prompterTextSize", 28f)
         set(v) = p.edit().putFloat("prompterTextSize", v).apply()
 
-    /** Korrektur, falls das Logo im Video gedreht erscheint (0/90/180/270). */
-    var logoRotOffset: Int
-        get() = int("logoRotOffset", 0)
-        set(v) = p.edit().putInt("logoRotOffset", v).apply()
+    /** Drehung des Logos selbst (0/90/180/270), gilt für Video, Vorschau und Fotos. */
+    var logoRotation: Int
+        get() = int("logoRotation", 0)
+        set(v) = p.edit().putInt("logoRotation", v).apply()
 }
