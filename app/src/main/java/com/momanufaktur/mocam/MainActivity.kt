@@ -823,7 +823,7 @@ class MainActivity : AppCompatActivity() {
         }
         buttons.addView(chip("Zurücksetzen") {
             settings.setFix(front, Settings.TARGET_VIDEO, 0)
-            settings.setVideoFlip(front, false)
+            settings.setVideoFlip(front, front)
             applyCameraFixes()
             buildSettings()
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })

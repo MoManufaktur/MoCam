@@ -114,13 +114,14 @@ class Settings(ctx: Context) {
     }
 
     /** Video: Bild links/rechts tauschen (falls die Aufnahme gegenüber der Vorschau gespiegelt ist). */
-    fun getVideoFlip(front: Boolean): Boolean = p.getBoolean("videoFlip_" + if (front) "front" else "rear", false)
+    // Mate 20 Pro: Frontvideo ist gegenüber der Vorschau gespiegelt -> standardmäßig zurückspiegeln
+    fun getVideoFlip(front: Boolean): Boolean = p.getBoolean("videoFlip2_" + if (front) "front" else "rear", front)
 
     fun setVideoFlip(front: Boolean, v: Boolean) {
-        p.edit().putBoolean("videoFlip_" + (if (front) "front" else "rear"), v).apply()
+        p.edit().putBoolean("videoFlip2_" + (if (front) "front" else "rear"), v).apply()
     }
 
-    private fun fixKey(front: Boolean, target: String) = "fix_" + (if (front) "front_" else "rear_") + target
+    private fun fixKey(front: Boolean, target: String) = "fix2_" + (if (front) "front_" else "rear_") + target
 
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?

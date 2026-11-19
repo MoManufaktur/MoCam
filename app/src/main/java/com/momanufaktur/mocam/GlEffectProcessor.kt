@@ -309,8 +309,8 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         GLES20.glUniform1f(uHasLogo, if (show) 1f else 0f)
         if (show) {
             // Seitenverhältnis in echten Pixeln der Ausgabe, im korrigierten (angezeigten) Bild
-            val d00 = dih((p00[0] - minX) / rangeX, (p00[1] - minY) / rangeY, fix)
-            val d10 = dih((p10[0] - minX) / rangeX, (p10[1] - minY) / rangeY, fix)
+            val d00 = dih(0f, 1f, fix)
+            val d10 = dih(1f, 1f, fix)
             val uAlongX = abs(d10[0] - d00[0]) >= abs(d10[1] - d00[1])
             val upW = if (uAlongX) out.size.width else out.size.height
             val upH = if (uAlongX) out.size.height else out.size.width
@@ -493,9 +493,14 @@ attribute vec4 aPos;
 attribute vec2 aUv;
 uniform mat4 uAdd;
 varying vec2 vS;
+varying vec2 vSm;
+varying vec2 vUv;
 void main() {
     gl_Position = aPos;
     vS = (uAdd * vec4(aUv, 0.0, 1.0)).xy;
+    // gleicher Punkt, im Ausgabebild links/rechts gespiegelt
+    vSm = (uAdd * vec4(1.0 - aUv.x, aUv.y, 0.0, 1.0)).xy;
+    vUv = aUv;
 }
 """
 
@@ -506,6 +511,8 @@ precision highp float;
 precision mediump float;
 #endif
 varying vec2 vS;
+varying vec2 vSm;
+varying vec2 vUv;
 uniform samplerExternalOES uCam;
 uniform sampler2D uLogo;
 uniform mat4 uTex;
@@ -559,17 +566,12 @@ vec2 dih(vec2 a, float k) {
 }
 
 void main() {
-    // Position dieses Bildpunkts im angezeigten Bild (0..1, oben links), nach Grundeinstellung
-    vec2 q = (toUpright(vS) - uPMin) / uPRange;
-    vec2 d = dih(q, uFix);
+    // Das Video wird auf diesem Gerät bereits aufrecht gespeichert: Position im Bild = Ausgabe-
+    // Koordinate (0..1, oben links). Grundeinstellung uFix optional obendrauf.
+    vec2 d = dih(vec2(vUv.x, 1.0 - vUv.y), uFix);
 
-    // Kamerabild unverändert übernehmen (Drehung macht CameraX korrekt) –
-    // nur bei gewünschter Spiegelung im angezeigten Bild links/rechts tauschen
-    vec2 sCam = vS;
-    if (uWantMirror > 0.5) {
-        vec2 qm = dihInv(vec2(1.0 - d.x, d.y), uFix);
-        sCam = toSensor(uPMin + qm * uPRange);
-    }
+    // Kamerabild unverändert übernehmen – nur bei Bedarf links/rechts tauschen
+    vec2 sCam = (uWantMirror > 0.5) ? vSm : vS;
     vec2 tc = (uTex * vec4(sCam, 0.0, 1.0)).xy;
 
     vec3 c = texture2D(uCam, tc).rgb;
