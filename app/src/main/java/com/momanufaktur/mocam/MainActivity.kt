@@ -3012,7 +3012,7 @@ class MainActivity : AppCompatActivity() {
 
         shutter.setBackgroundResource(
             when {
-                rec -> R.drawable.shutter_recording
+                rec || intervalRunning -> R.drawable.shutter_recording
                 videoMode -> R.drawable.shutter_video
                 else -> R.drawable.shutter_photo
             }
