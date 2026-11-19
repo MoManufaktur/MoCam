@@ -898,10 +898,10 @@ class MainActivity : AppCompatActivity() {
         val ic = imageCapture ?: return
         val filter = processor.filter
         val logo = if (settings.logoEnabled && settings.logoOnPhotos) logoBitmap else null
-        val needsProcessing = !filter.isIdentity || logo != null
-        val meta = ImageCapture.Metadata().apply {
-            isReversedHorizontal = lensFacing == CameraSelector.LENS_FACING_FRONT && settings.frontMirror
-        }
+        // Spiegelung macht MoCam selbst (CameraX kippt sie auf diesem Gerät um 90°)
+        val mirror = lensFacing == CameraSelector.LENS_FACING_FRONT && settings.frontMirror
+        val needsProcessing = !filter.isIdentity || logo != null || mirror
+        val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
 
         flashScreen()
         sound.play(MediaActionSound.SHUTTER_CLICK)
@@ -931,7 +931,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     bg.execute {
                         val uri = try {
-                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a)
+                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a, mirror)
                         } catch (t: Throwable) {
                             Log.e(TAG, "Fotoverarbeitung", t)
                             null

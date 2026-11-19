@@ -58,9 +58,9 @@ class GlEffectProcessor : SurfaceProcessor {
     @Volatile var frontMirror = false
     /**
      * Ausrichtung der Frontkamera (0..7): Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt.
-     * Die Frontkamera des Mate 20 Pro liefert ihr Bild anders als die Rückkamera – Standard 1.
+     * Mate 20 Pro: Wert 2 (Anzeige „3/8“) auf dem Gerät bestätigt.
      */
-    @Volatile var frontOrientation = 1
+    @Volatile var frontOrientation = 2
     /** Vorzeichen der Abbildung für ungespiegelte Ausgaben – wird an der Rückkamera gelernt. */
     private var unmirroredSign = -1f
 

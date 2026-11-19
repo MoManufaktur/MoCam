@@ -74,7 +74,7 @@ class Settings(ctx: Context) {
 
     /** Ausrichtung der Frontkamera für Logo und Spiegelung (0..7), siehe GlEffectProcessor. */
     var frontOrientation: Int
-        get() = int("frontOrientation", 1)
+        get() = int("frontOrientation", 2)
         set(v) = p.edit().putInt("frontOrientation", v).apply()
 
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
