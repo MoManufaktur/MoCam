@@ -238,6 +238,11 @@ class Settings(ctx: Context) {
         get() = bool("topBarWrap", false)
         set(v) = p.edit().putBoolean("topBarWrap", v).apply()
 
+    /** #9 Sprache der Untertitel: "de", "en-gb", "en-us" */
+    var subtitleLang: String
+        get() = p.getString("sub_lang", "de") ?: "de"
+        set(v) = p.edit().putString("sub_lang", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

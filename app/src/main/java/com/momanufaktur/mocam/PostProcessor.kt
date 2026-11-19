@@ -39,7 +39,8 @@ class PostProcessor(private val ctx: Context) {
         val outro: File?,
         /** "burn" = einbrennen, "srt" = .srt-Datei, "both" = beides */
         val subMode: String = "burn",
-        val subStyle: SubtitleStyle = SubtitleStyle()
+        val subStyle: SubtitleStyle = SubtitleStyle(),
+        val subLang: String = "de"
     )
 
     /** Status-Meldungen für die Anzeige (läuft auf dem Hauptthread). */
@@ -71,7 +72,7 @@ class PostProcessor(private val ctx: Context) {
             onStatus?.invoke("💬 Untertitel werden erkannt …")
             bg.execute {
                 val caps = try {
-                    Subtitles.recognize(ctx, job.input)
+                    Subtitles.recognize(ctx, job.input, job.subLang)
                 } catch (t: Throwable) {
                     Log.e(TAG, "Spracherkennung", t)
                     emptyList()

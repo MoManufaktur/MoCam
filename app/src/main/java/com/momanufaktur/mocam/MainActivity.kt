@@ -234,6 +234,17 @@ class MainActivity : AppCompatActivity() {
 
         bindViews()
         applyTopBarMode()
+        // Logo-Menü: Kopfzeile mit „←“ und „✓ Fertig“ (Titel wandert in die Zeile)
+        run {
+            val lp = logoPanel as LinearLayout
+            val title = findViewById<TextView>(R.id.logoPanelTitle)
+            lp.removeView(title)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(uiChip("←") { closeLogoPanel() }, wrapLp(10))
+            row.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(uiChip("✓ Fertig", selected = true) { closeLogoPanel() }, wrapLp(0))
+            lp.addView(row, 0)
+        }
         // Vorschau-Knopf im Logo-Menü (unter Titel und Registern)
         (logoPanel as LinearLayout).addView(peekChip(logoPanel), 2,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
@@ -968,7 +979,7 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(text("💬 Untertitel (Deutsch, offline)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
         settingsContent.addView(text(
             (if (settings.subtitlesEnabled) "An" else "Aus") + " · " + subModeName(settings.subtitleMode) +
-                (if (Subtitles.isModelReady(this)) "" else " · Sprachmodell fehlt"),
+                (if (Subtitles.isModelReady(this, settings.subtitleLang)) "" else " · Sprachmodell fehlt"),
             12f, Color.argb(200, 255, 255, 255)))
         settingsContent.addView(chip("💬 Untertitel einstellen …") { openSubtitleEditor() },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
@@ -1919,7 +1930,7 @@ class MainActivity : AppCompatActivity() {
         bottomPanel.visibility = View.GONE
         placeEditor()
         editorContent.removeAllViews()
-        editorContent.addView(uiText(title, 17f, getColor(R.color.accent), true))
+        editorContent.addView(headerRow(title) { closeEditor() })
         val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
         quick.addView(peekChip(editorPanel), wrapLp(8))
         quick.addView(uiChip("⇅ Menü oben/unten") { editorAtTop = !editorAtTop; placeEditor() }, wrapLp(8))
@@ -1933,6 +1944,16 @@ class MainActivity : AppCompatActivity() {
         overlay.lowerPinned = false
         overlay.subPreviewText = null
         openSettings()
+    }
+
+    /** Kopfzeile: „←“ zurück, Titel, „✓ Fertig“ – beide speichern (Einstellungen sind sofort gespeichert) und schließen. */
+    private fun headerRow(title: String, onClose: () -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        row.addView(uiChip("←") { onClose() }, wrapLp(10))
+        row.addView(uiText(title, 17f, getColor(R.color.accent), true),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(uiChip("✓ Fertig", selected = true) { onClose() }, wrapLp(0))
+        return row
     }
 
     private fun uiText(t: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false) =
@@ -2113,9 +2134,15 @@ class MainActivity : AppCompatActivity() {
                 isChecked = settings.subtitlesEnabled
                 setOnCheckedChangeListener { _, c ->
                     settings.subtitlesEnabled = c
-                    if (c && !Subtitles.isModelReady(this@MainActivity)) toast("Bitte zuerst das Sprachmodell laden")
+                    if (c && !Subtitles.isModelReady(this@MainActivity, settings.subtitleLang)) toast("Bitte zuerst das Sprachmodell laden")
                 }
             })
+            uiSection("Sprache")
+            val langs = Subtitles.LANGUAGES
+            uiChoice(langs.map { it.second }, langs.indexOfFirst { it.first == settings.subtitleLang }) { i ->
+                settings.subtitleLang = langs[i].first
+                openSubtitleEditor()
+            }
             uiSection("Speichern als")
             val modes = listOf("burn", "srt", "both")
             uiChoice(listOf("Eingebrannt", ".srt-Datei", "Beides"), modes.indexOf(settings.subtitleMode)) { i ->
@@ -2131,10 +2158,16 @@ class MainActivity : AppCompatActivity() {
             uiSlider("Hintergrund", 0f, 1f, st.bgAlpha) { v -> update { it.copy(bgAlpha = v) } }
 
             uiSection("Sprachmodell")
-            val modelText = uiText(if (Subtitles.isModelReady(this)) "Bereit ✓ (Deutsch, offline)" else "Noch nicht geladen (ca. 45 MB, einmalig)",
+            val lang = settings.subtitleLang
+            val langName = Subtitles.LANGUAGES.firstOrNull { it.first == lang }?.second ?: lang
+            val modelText = uiText(if (Subtitles.isModelReady(this, lang)) "Bereit ✓ ($langName, offline)"
+                else "Noch nicht geladen (${Subtitles.modelSizeText(lang)}, einmalig)",
                 12f, Color.argb(200, 255, 255, 255))
             editorContent.addView(modelText)
-            if (!Subtitles.isModelReady(this)) editorContent.addView(uiChip("⬇ Sprachmodell laden") { downloadModel(modelText) }, wrapLp())
+            if (!Subtitles.isModelReady(this, lang)) editorContent.addView(uiChip("⬇ Sprachmodell laden") { downloadModel(modelText) }, wrapLp())
+            if (lang.startsWith("en")) editorContent.addView(uiText(
+                "Englisch nutzt ein gemeinsames Offline-Modell für UK und US. Bei UK stellt MoCam die Schreibweise auf britisch um (colour, centre, organise …).",
+                11f, Color.argb(170, 255, 255, 255)))
 
             uiButtons {
                 settings.subtitleStyle = SubtitleStyle()
@@ -2165,12 +2198,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Startet Untertitel und/oder Intro/Outro für ein fertiges Video. @return true wenn gestartet. */
     private fun startPostProcessing(uri: Uri): Boolean {
-        val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this) && settings.timelapse == 0
+        val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this, settings.subtitleLang) && settings.timelapse == 0
         val intro = if (settings.introOutroEnabled) introFile().takeIf { it.exists() } else null
         val outro = if (settings.introOutroEnabled) outroFile().takeIf { it.exists() } else null
         if (!subs && intro == null && outro == null) return false
         post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro,
-            settings.subtitleMode, settings.subtitleStyle))
+            settings.subtitleMode, settings.subtitleStyle, settings.subtitleLang))
         toast("Video gespeichert – wird jetzt bearbeitet")
         return true
     }
@@ -2179,7 +2212,7 @@ class MainActivity : AppCompatActivity() {
         status.text = "Sprachmodell wird geladen … 0 %"
         bg.execute {
             val ok = try {
-                Subtitles.downloadModel(this) { p -> runOnUiThread { status.text = "Sprachmodell wird geladen … $p %" } }
+                Subtitles.downloadModel(this, settings.subtitleLang) { p -> runOnUiThread { status.text = "Sprachmodell wird geladen … $p %" } }
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Modell-Download", e)

@@ -28,25 +28,34 @@ data class Caption(val start: Double, val end: Double, val text: String)
  */
 object Subtitles {
 
-    private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip"
-    private const val MODEL_DIR = "vosk-de"
+    /** Sprachen: "de" Deutsch, "en-gb" Englisch (UK), "en-us" Englisch (US). */
+    val LANGUAGES = listOf("de" to "Deutsch", "en-gb" to "English (UK)", "en-us" to "English (US)")
 
-    fun modelDir(ctx: Context) = File(ctx.filesDir, MODEL_DIR)
+    /** Für UK und US gibt es offline nur ein (US-)Modell – UK bekommt britische Schreibweise. */
+    private fun modelKey(lang: String) = if (lang.startsWith("en")) "en" else "de"
+
+    private fun modelUrl(lang: String) = if (modelKey(lang) == "en")
+        "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    else "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip"
+
+    fun modelSizeText(lang: String) = if (modelKey(lang) == "en") "ca. 40 MB" else "ca. 45 MB"
+
+    fun modelDir(ctx: Context, lang: String) = File(ctx.filesDir, "vosk-" + modelKey(lang))
 
     /** Pfad des entpackten Modells (Ordner mit „am“, „conf“ …) oder null. */
-    fun modelPath(ctx: Context): File? {
-        val root = modelDir(ctx)
+    fun modelPath(ctx: Context, lang: String): File? {
+        val root = modelDir(ctx, lang)
         if (!root.exists()) return null
         if (File(root, "conf").exists()) return root
         return root.listFiles()?.firstOrNull { File(it, "conf").exists() }
     }
 
-    fun isModelReady(ctx: Context) = modelPath(ctx) != null
+    fun isModelReady(ctx: Context, lang: String) = modelPath(ctx, lang) != null
 
-    /** Lädt das Sprachmodell (~45 MB) herunter und entpackt es. Läuft im Hintergrund-Thread. */
-    fun downloadModel(ctx: Context, onProgress: (Int) -> Unit) {
-        val tmp = File(ctx.cacheDir, "vosk-de.zip")
-        val conn = URL(MODEL_URL).openConnection() as HttpURLConnection
+    /** Lädt das Sprachmodell herunter und entpackt es. Läuft im Hintergrund-Thread. */
+    fun downloadModel(ctx: Context, lang: String, onProgress: (Int) -> Unit) {
+        val tmp = File(ctx.cacheDir, "vosk-${modelKey(lang)}.zip")
+        val conn = URL(modelUrl(lang)).openConnection() as HttpURLConnection
         conn.connectTimeout = 20000
         conn.readTimeout = 30000
         val total = conn.contentLengthLong
@@ -67,7 +76,7 @@ object Subtitles {
                 }
             }
         }
-        val root = modelDir(ctx)
+        val root = modelDir(ctx, lang)
         root.deleteRecursively()
         root.mkdirs()
         ZipInputStream(tmp.inputStream()).use { zip ->
@@ -86,8 +95,8 @@ object Subtitles {
     }
 
     /** Erkennt die Sprache im Video und bildet daraus Untertitel-Blöcke. */
-    fun recognize(ctx: Context, video: Uri): List<Caption> {
-        val path = modelPath(ctx) ?: return emptyList()
+    fun recognize(ctx: Context, video: Uri, lang: String): List<Caption> {
+        val path = modelPath(ctx, lang) ?: return emptyList()
         val model = Model(path.absolutePath)
         val rec = Recognizer(model, 16000f)
         rec.setWords(true)
@@ -107,8 +116,41 @@ object Subtitles {
         if (hasAudio) collect(rec.finalResult)
         rec.close()
         model.close()
-        return group(words)
+        val caps = group(words)
+        return if (lang.startsWith("en")) caps.map { c ->
+            c.copy(text = englishFix(c.text, british = lang == "en-gb"))
+        } else caps
     }
+
+    private val UK = mapOf(
+        "color" to "colour", "colors" to "colours", "colored" to "coloured", "favorite" to "favourite",
+        "favorites" to "favourites", "favor" to "favour", "honor" to "honour", "labor" to "labour",
+        "neighbor" to "neighbour", "neighbors" to "neighbours", "behavior" to "behaviour", "flavor" to "flavour",
+        "humor" to "humour", "rumor" to "rumour", "harbor" to "harbour", "center" to "centre", "centers" to "centres",
+        "theater" to "theatre", "fiber" to "fibre", "liter" to "litre", "liters" to "litres", "meters" to "metres",
+        "kilometer" to "kilometre", "kilometers" to "kilometres", "gray" to "grey", "mom" to "mum",
+        "traveling" to "travelling", "traveled" to "travelled", "traveler" to "traveller", "canceled" to "cancelled",
+        "canceling" to "cancelling", "modeling" to "modelling", "labeled" to "labelled", "fueled" to "fuelled",
+        "jewelry" to "jewellery", "catalog" to "catalogue", "dialog" to "dialogue", "analog" to "analogue",
+        "defense" to "defence", "offense" to "offence", "license" to "licence", "practiced" to "practised",
+        "aluminum" to "aluminium"
+    )
+    private val IZE_KEEP = setOf("size", "sizes", "prize", "prizes", "seize", "seized", "capsize", "maize", "baize")
+
+    /** Englisch: „i“ → „I“; bei UK britische Schreibweise (colour, centre, organise …). */
+    private fun englishFix(text: String, british: Boolean): String =
+        text.split(" ").joinToString(" ") { w ->
+            var x = if (w == "i") "I" else if (w.startsWith("i'")) "I" + w.substring(1) else w
+            if (british) {
+                UK[x]?.let { x = it } ?: run {
+                    if (x !in IZE_KEEP && x.length > 5) {
+                        x = x.replace(Regex("(i)z(e|ed|es|ing|ation|ations)$"), "$1s$2")
+                            .replace(Regex("(ly)z(e|ed|es|ing)$"), "$1s$2")
+                    }
+                }
+            }
+            x
+        }
 
     /** Wörter zu gut lesbaren Blöcken zusammenfassen (max. ~6 Wörter / 3 s). */
     private fun group(words: List<Triple<Double, Double, String>>): List<Caption> {
