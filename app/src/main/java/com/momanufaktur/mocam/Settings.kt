@@ -163,6 +163,28 @@ class Settings(ctx: Context) {
         p.edit().putString("logoFolder_$logoFile", folder).apply()
     }
 
+    /** #6 Bauchbinde */
+    var lowerEnabled: Boolean
+        get() = bool("lowerEnabled", false)
+        set(v) = p.edit().putBoolean("lowerEnabled", v).apply()
+
+    var lowerName: String
+        get() = p.getString("lowerName", "Kai") ?: ""
+        set(v) = p.edit().putString("lowerName", v).apply()
+
+    var lowerTitle: String
+        get() = p.getString("lowerTitle", "Gründer · MoManufaktur") ?: ""
+        set(v) = p.edit().putString("lowerTitle", v).apply()
+
+    var lowerSeconds: Int
+        get() = int("lowerSeconds", 5)
+        set(v) = p.edit().putInt("lowerSeconds", v).apply()
+
+    /** #8 Mikrofon: "auto" (intern bzw. USB automatisch) oder "bluetooth". */
+    var micMode: String
+        get() = p.getString("micMode", "auto") ?: "auto"
+        set(v) = p.edit().putString("micMode", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

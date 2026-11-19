@@ -82,6 +82,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnFlash: TextView
     private lateinit var btnTimer: TextView
     private lateinit var btnLimit: TextView
+    private lateinit var btnLower: TextView
+    private lateinit var audioLevel: android.widget.ProgressBar
     private lateinit var shareBar: View
     private lateinit var shareButtons: LinearLayout
     private lateinit var btnGrid: TextView
@@ -252,6 +254,8 @@ class MainActivity : AppCompatActivity() {
         btnFlash = findViewById(R.id.btnFlash)
         btnTimer = findViewById(R.id.btnTimer)
         btnLimit = findViewById(R.id.btnLimit)
+        btnLower = findViewById(R.id.btnLower)
+        audioLevel = findViewById(R.id.audioLevel)
         shareBar = findViewById(R.id.shareBar)
         shareButtons = findViewById(R.id.shareButtons)
         btnGrid = findViewById(R.id.btnGrid)
@@ -325,6 +329,16 @@ class MainActivity : AppCompatActivity() {
 
         // Obere Leiste
         btnFlash.setOnClickListener { cycleFlash() }
+        btnLower.setOnClickListener {
+            settings.lowerEnabled = !settings.lowerEnabled
+            if (settings.lowerEnabled) {
+                applyLowerThird()
+                previewLowerThird()
+                toast("Bauchbinde an – Text in ⚙️ ändern")
+            }
+            updateUi()
+        }
+        applyLowerThird()
         btnLimit.setOnClickListener {
             if (recording != null) return@setOnClickListener
             settings.timeLimit = when (settings.timeLimit) { 0 -> 15; 15 -> 30; 30 -> 60; 60 -> 90; else -> 0 }
@@ -835,6 +849,51 @@ class MainActivity : AppCompatActivity() {
         })
         settingsContent.addView(flipRow)
 
+        // ---------- #6 Bauchbinde ----------
+        settingsContent.addView(text("🪪 Bauchbinde (Video)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        fun field(hintText: String, value: String, onChange: (String) -> Unit) = EditText(this).apply {
+            setText(value)
+            hint = hintText
+            setSingleLine()
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun afterTextChanged(e: android.text.Editable?) {
+                    onChange(e?.toString() ?: "")
+                    applyLowerThird()
+                }
+            })
+        }
+        settingsContent.addView(field("Name", settings.lowerName) { settings.lowerName = it })
+        settingsContent.addView(field("Funktion / Firma", settings.lowerTitle) { settings.lowerTitle = it })
+        val lowerRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        lowerRow.addView(chip("Dauer: ${settings.lowerSeconds} s") {}.also { d ->
+            d.setOnClickListener {
+                settings.lowerSeconds = when (settings.lowerSeconds) { 3 -> 5; 5 -> 8; 8 -> 10; else -> 3 }
+                d.text = "Dauer: ${settings.lowerSeconds} s"
+                applyLowerThird()
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        lowerRow.addView(chip("👁 Vorschau") { previewLowerThird() })
+        settingsContent.addView(lowerRow)
+
+        // ---------- #8 Mikrofon ----------
+        settingsContent.addView(text("🎤 Mikrofon", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        settingsContent.addView(text("Erkannt: " + inputDevicesText(), 12f, Color.argb(200, 255, 255, 255)))
+        val micRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        fun micLabel() = if (settings.micMode == "bluetooth") "Quelle: Bluetooth-Headset" else "Quelle: Automatisch (intern / USB)"
+        micRow.addView(chip(micLabel()) {}.also { m ->
+            m.setOnClickListener {
+                settings.micMode = if (settings.micMode == "bluetooth") "auto" else "bluetooth"
+                m.text = micLabel()
+            }
+        })
+        settingsContent.addView(micRow)
+        settingsContent.addView(text("USB-Mikrofone werden automatisch genutzt. Der Pegel erscheint während der Aufnahme oben (rot = zu laut).",
+            11f, Color.argb(170, 255, 255, 255)).apply { setPadding(0, dp(4), 0, 0) })
+
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(14), 0, 0)
@@ -1154,6 +1213,7 @@ class MainActivity : AppCompatActivity() {
     private fun startRecording() {
         val vc = videoCapture ?: return
         MediaStoreUtil.subFolder = currentFolder()
+        if (settings.audio && settings.micMode == "bluetooth") startBluetoothMic()
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
             .build()
@@ -1167,6 +1227,7 @@ class MainActivity : AppCompatActivity() {
             when (event) {
                 is VideoRecordEvent.Start -> {
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                    if (settings.lowerEnabled) startLowerThird()
                     if (prompterActive()) prompterView.playing = true
                     updateUi()
                 }
@@ -1190,10 +1251,18 @@ class MainActivity : AppCompatActivity() {
                         String.format("%s %02d:%02d", if (isPaused) "❚❚" else "●", s / 60, s % 60)
                     }
                     if (limit > 0 && s >= limit) stopRecording()
+                    // #8 Pegel
+                    val amp = event.recordingStats.audioStats.audioAmplitude
+                    audioLevel.progress = (amp * 100).roundToInt().coerceIn(0, 100)
+                    audioLevel.progressTintList = android.content.res.ColorStateList.valueOf(
+                        if (amp > 0.9) Color.rgb(229, 57, 53) else if (amp > 0.7) Color.rgb(255, 213, 79) else Color.rgb(76, 175, 80)
+                    )
                 }
                 is VideoRecordEvent.Finalize -> {
                     sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
                     recording = null
+                    stopLowerThird()
+                    stopBluetoothMic()
                     isPaused = false
                     prompterView.playing = false
                     if (!event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE) {
@@ -1598,6 +1667,76 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // #6 Bauchbinde
+    // =====================================================================
+
+    private fun applyLowerThird() {
+        val bmp = LowerThird.render(settings.lowerName, settings.lowerTitle)
+        videoProcessor.setLowerThird(bmp)
+        overlay.lowerBitmap = bmp
+        val dur = settings.lowerSeconds * 1000L
+        fxState.lowerDurationMs = dur
+        overlay.lowerDurationMs = dur
+    }
+
+    private fun startLowerThird() {
+        val now = android.os.SystemClock.uptimeMillis()
+        fxState.lowerStartMs = now
+        overlay.lowerStartMs = now
+    }
+
+    private fun stopLowerThird() {
+        fxState.lowerStartMs = 0L
+        overlay.lowerStartMs = 0L
+    }
+
+    /** Nur Anzeige zum Ausprobieren – wird nicht aufgenommen. */
+    private fun previewLowerThird() {
+        overlay.lowerStartMs = android.os.SystemClock.uptimeMillis()
+    }
+
+    // =====================================================================
+    // #8 Mikrofon
+    // =====================================================================
+
+    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as android.media.AudioManager }
+    private var btMicActive = false
+
+    private fun inputDevicesText(): String {
+        val names = audioManager.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS).map {
+            when (it.type) {
+                android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Intern"
+                android.media.AudioDeviceInfo.TYPE_USB_DEVICE, android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth"
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Kabel-Headset"
+                else -> null
+            }
+        }.filterNotNull().distinct()
+        return if (names.isEmpty()) "Intern" else names.joinToString(", ")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startBluetoothMic() {
+        try {
+            audioManager.startBluetoothSco()
+            audioManager.isBluetoothScoOn = true
+            btMicActive = true
+        } catch (e: Exception) {
+            toast("Bluetooth-Mikrofon nicht verfügbar – internes Mikrofon")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopBluetoothMic() {
+        if (!btMicActive) return
+        try {
+            audioManager.isBluetoothScoOn = false
+            audioManager.stopBluetoothSco()
+        } catch (e: Exception) { }
+        btMicActive = false
+    }
+
+    // =====================================================================
     // #2 Projektordner (pro Logo)
     // =====================================================================
 
@@ -1763,6 +1902,9 @@ class MainActivity : AppCompatActivity() {
         btnTimer.text = if (settings.timer == 0) "⏱ Timer aus" else "⏱ ${settings.timer}s"
         btnLimit.text = if (settings.timeLimit == 0) "⏳ Limit aus" else "⏳ ${settings.timeLimit}s"
         btnLimit.visibility = if (videoMode) View.VISIBLE else View.GONE
+        btnLower.text = if (settings.lowerEnabled) "🪪 Bauchbinde an" else "🪪 Bauchbinde aus"
+        btnLower.visibility = if (videoMode) View.VISIBLE else View.GONE
+        audioLevel.visibility = if (rec && settings.audio) View.VISIBLE else View.GONE
         btnGrid.text = if (settings.grid) "▦ Raster an" else "▦ Raster aus"
         btnQuality.text = "🎞 " + qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].second
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"

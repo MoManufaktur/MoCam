@@ -52,6 +52,9 @@ class FxState {
     /** Video: Ausrichtung des Logos (0..7) und Spiegel-Korrektur des Bildes. */
     @Volatile var videoFix = 0
     @Volatile var videoFlip = false
+    /** #6 Bauchbinde: Startzeit (uptimeMillis, 0 = aus) und Dauer. */
+    @Volatile var lowerStartMs = 0L
+    @Volatile var lowerDurationMs = 5000L
 }
 
 /**
@@ -83,6 +86,12 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
 
     @Volatile private var logoAspect = 1f // Höhe / Breite
     @Volatile private var hasLogo = false
+    @Volatile private var hasLower = false
+    @Volatile private var lowerAspect = 0.2f
+    private var lowerTex = 0
+    private var uLower = 0
+    private var uLowerRect = 0
+    private var uLowerAlpha = 0
 
     // ---- EGL / GL ----
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -203,6 +212,23 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         }
     }
 
+    /** #6 Bauchbinde als Textur (nur der Video-Prozessor zeichnet sie). */
+    fun setLowerThird(bitmap: Bitmap?) {
+        handler.post {
+            if (released || !glReady) return@post
+            makeCurrentPbuffer()
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lowerTex)
+            if (bitmap != null && !bitmap.isRecycled) {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+                lowerAspect = bitmap.height.toFloat() / bitmap.width.toFloat()
+                hasLower = true
+            } else {
+                uploadTransparentPixel()
+                hasLower = false
+            }
+        }
+    }
+
     fun release() {
         handler.post {
             if (released) return@post
@@ -221,7 +247,7 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
                 }
                 input = null
                 GLES20.glDeleteProgram(program)
-                GLES20.glDeleteTextures(1, intArrayOf(logoTex), 0)
+                GLES20.glDeleteTextures(2, intArrayOf(logoTex, lowerTex), 0)
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 EGL14.eglDestroySurface(display, pbuffer)
                 EGL14.eglDestroyContext(display, context)
@@ -268,6 +294,10 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, logoTex)
         GLES20.glUniform1i(uLogo, 1)
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lowerTex)
+        GLES20.glUniform1i(uLower, 2)
 
         GLES20.glUniformMatrix4fv(uTex, 1, false, stMatrix, 0)
         GLES20.glUniformMatrix4fv(uAdd, 1, false, addMatrix, 0)
@@ -319,6 +349,18 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
             val h = w * logoAspect * upright
             GLES20.glUniform4f(uRect, logoCx - w / 2f, logoCy - h / 2f, w, h)
             GLES20.glUniform1f(uAlpha, logoAlpha)
+        }
+
+        // #6 Bauchbinde (nur Video, nur in den ersten Sekunden der Aufnahme)
+        val la = if (burnLogo && hasLower) LowerThird.alphaNow(state.lowerStartMs, state.lowerDurationMs) else 0f
+        GLES20.glUniform1f(uLowerAlpha, la)
+        if (la > 0f) {
+            val upright = out.size.width.toFloat() / out.size.height.toFloat()
+            val bw = LowerThird.MAX_WIDTH.coerceAtMost(0.80f)
+            // Breite so, dass die Schrift nicht zu groß wird: an Bildbreite orientiert
+            val w = bw * (if (upright < 1f) 1f else 0.6f)
+            val h = w * lowerAspect * upright
+            GLES20.glUniform4f(uLowerRect, LowerThird.LEFT, LowerThird.BOTTOM - h, w, h)
         }
 
         GLES20.glEnableVertexAttribArray(aPos)
@@ -419,6 +461,19 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
         uploadTransparentPixel()
+
+        val t2 = IntArray(1)
+        GLES20.glGenTextures(1, t2, 0)
+        lowerTex = t2[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lowerTex)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        uploadTransparentPixel()
+        uLower = GLES20.glGetUniformLocation(program, "uLower")
+        uLowerRect = GLES20.glGetUniformLocation(program, "uLowerRect")
+        uLowerAlpha = GLES20.glGetUniformLocation(program, "uLowerAlpha")
         glReady = program != 0
     }
 
@@ -526,6 +581,9 @@ uniform vec2 uPRange;
 uniform float uAlpha;
 uniform float uFix;
 uniform float uWantMirror;
+uniform sampler2D uLower;
+uniform vec4 uLowerRect;
+uniform float uLowerAlpha;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
@@ -582,6 +640,13 @@ void main() {
             vec4 l = texture2D(uLogo, luv);
             float a = l.a * uAlpha;
             c = c * (1.0 - a) + l.rgb * uAlpha;
+        }
+    }
+    if (uLowerAlpha > 0.0) {
+        vec2 bu = (d - uLowerRect.xy) / uLowerRect.zw;
+        if (bu.x >= 0.0 && bu.x <= 1.0 && bu.y >= 0.0 && bu.y <= 1.0) {
+            vec4 b = texture2D(uLower, bu);
+            c = c * (1.0 - b.a * uLowerAlpha) + b.rgb * uLowerAlpha;
         }
     }
     gl_FragColor = vec4(c, 1.0);

@@ -122,6 +122,7 @@
                 <TextView android:id="@+id/btnFormat" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLimit" style="@style/TopChip" />
+                <TextView android:id="@+id/btnLower" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />
                 <TextView android:id="@+id/btnAudio" style="@style/TopChip" />
@@ -146,6 +147,18 @@
             android:textColor="#FF5252"
             android:textSize="16sp"
             android:textStyle="bold"
+            android:visibility="gone" />
+
+        <!-- #8 Tonpegel während der Aufnahme -->
+        <ProgressBar
+            android:id="@+id/audioLevel"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="160dp"
+            android:layout_height="6dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="4dp"
+            android:max="100"
+            android:progressTint="#4CAF50"
             android:visibility="gone" />
     </LinearLayout>
 

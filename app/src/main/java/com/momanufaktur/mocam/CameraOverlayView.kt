@@ -45,6 +45,12 @@ class CameraOverlayView @JvmOverloads constructor(
     /** Logo zusätzlich in der Ebene zeichnen (wenn die Kamera-Vorschau es nicht selbst zeigt). */
     var drawLogoPreview = false
         set(v) { field = v; invalidate() }
+    /** #6 Bauchbinde in der Vorschau (gleiche Lage wie im Video). */
+    var lowerBitmap: android.graphics.Bitmap? = null
+    var lowerStartMs = 0L
+        set(v) { field = v; invalidate() }
+    var lowerDurationMs = 5000L
+
     /** Logo in der Vorschau anzeigen (Logo an). */
     var showLogo = false
         set(v) { field = v; invalidate() }
@@ -53,6 +59,7 @@ class CameraOverlayView @JvmOverloads constructor(
     var logoBitmap: android.graphics.Bitmap? = null
         set(v) { field = v; invalidate() }
     private val logoPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val lowerPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
     /** Fingerrichtung beim Verschieben (0..7), siehe Grundeinstellungen. */
     var dragFix = 0
@@ -146,6 +153,19 @@ class CameraOverlayView @JvmOverloads constructor(
             logoBitmap?.let {
                 logoPaint.alpha = (logoAlpha * 255).toInt().coerceIn(0, 255)
                 canvas.drawBitmap(it, null, logoScreenRect(RectF()), logoPaint)
+            }
+        }
+        lowerBitmap?.let { lb ->
+            val a = LowerThird.alphaNow(lowerStartMs, lowerDurationMs)
+            if (a > 0f) {
+                val cr = contentRect(tmpRect)
+                val w = LowerThird.MAX_WIDTH * cr.width()
+                val h = w * lb.height / lb.width
+                val left = cr.left + LowerThird.LEFT * cr.width()
+                val bottom = cr.top + LowerThird.BOTTOM * cr.height()
+                lowerPaint.alpha = (a * 255).toInt()
+                canvas.drawBitmap(lb, null, RectF(left, bottom - h, left + w, bottom), lowerPaint)
+                postInvalidateOnAnimation()
             }
         }
         if (editLogo && !hasLogo) {
