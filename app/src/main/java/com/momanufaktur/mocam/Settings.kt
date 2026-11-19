@@ -42,21 +42,36 @@ class Settings(ctx: Context) {
         get() = bool("logoOnPhotos", true)
         set(v) = p.edit().putBoolean("logoOnPhotos", v).apply()
 
+    /**
+     * Logo-Einstellungen gelten je Kamera und Modus („rear_video“, „front_photo“ …).
+     * Wird von MainActivity beim Kamera-/Moduswechsel gesetzt. Fehlt ein Wert, gilt der alte globale.
+     */
+    var logoContext: String = "rear_video"
+
+    private fun lk(key: String) = key + "_" + logoContext
+    private fun lf(key: String, def: Float) = p.getFloat(lk(key), p.getFloat(key, def))
+    private fun li(key: String, def: Int) = p.getInt(lk(key), p.getInt(key, def))
+
     var logoCx: Float
-        get() = float("logoCx", 0.80f)
-        set(v) = p.edit().putFloat("logoCx", v).apply()
+        get() = lf("logoCx", 0.80f)
+        set(v) = p.edit().putFloat(lk("logoCx"), v).apply()
 
     var logoCy: Float
-        get() = float("logoCy", 0.10f)
-        set(v) = p.edit().putFloat("logoCy", v).apply()
+        get() = lf("logoCy", 0.10f)
+        set(v) = p.edit().putFloat(lk("logoCy"), v).apply()
 
     var logoW: Float
-        get() = float("logoW", 0.30f)
-        set(v) = p.edit().putFloat("logoW", v).apply()
+        get() = lf("logoW", 0.30f)
+        set(v) = p.edit().putFloat(lk("logoW"), v).apply()
 
     var logoAlpha: Float
-        get() = float("logoAlpha", 1f)
-        set(v) = p.edit().putFloat("logoAlpha", v).apply()
+        get() = lf("logoAlpha", 1f)
+        set(v) = p.edit().putFloat(lk("logoAlpha"), v).apply()
+
+    /** Fingerrichtung beim Verschieben (0..7: Drehung (Wert % 4) * 90°, ab 4 gespiegelt). */
+    var logoDragFix: Int
+        get() = p.getInt(lk("logoDragFix"), 0)
+        set(v) = p.edit().putInt(lk("logoDragFix"), v).apply()
 
     /** Index in der Formatliste (0 = 9:16, 1 = 3:4, 2 = 4:5, 3 = 1:1) */
     var videoFormat: Int
@@ -104,8 +119,8 @@ class Settings(ctx: Context) {
 
     /** Drehung des Logos selbst (0/90/180/270), gilt für Video, Vorschau und Fotos. */
     var logoRotation: Int
-        get() = int("logoRotation", 0)
-        set(v) = p.edit().putInt("logoRotation", v).apply()
+        get() = li("logoRotation", 0)
+        set(v) = p.edit().putInt(lk("logoRotation"), v).apply()
 
     companion object {
         const val TARGET_PREVIEW = "preview"

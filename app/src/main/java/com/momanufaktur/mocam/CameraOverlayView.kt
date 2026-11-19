@@ -49,6 +49,9 @@ class CameraOverlayView @JvmOverloads constructor(
         set(v) { field = v; invalidate() }
     private val logoPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
+    /** Fingerrichtung beim Verschieben (0..7), siehe Grundeinstellungen. */
+    var dragFix = 0
+
     var logoCx = 0.8f
     var logoCy = 0.1f
     var logoW = 0.3f
@@ -183,9 +186,12 @@ class CameraOverlayView @JvmOverloads constructor(
             if (!editLogo || !hasLogo || scaleDetector.isInProgress || e2.pointerCount > 1) return false
             val cr = contentRect(tmpRect)
             if (cr.width() <= 0f) return false
-            val dx = distanceX / cr.width() * (if (mirrorX) -1f else 1f)
-            logoCx = (logoCx - dx).coerceIn(0f, 1f)
-            logoCy = (logoCy - distanceY / cr.height()).coerceIn(0f, 1f)
+            var vx = -distanceX / cr.width()
+            var vy = -distanceY / cr.height()
+            if (dragFix >= 4) vx = -vx
+            repeat(dragFix % 4) { val t = vx; vx = -vy; vy = t }
+            logoCx = (logoCx + vx).coerceIn(0f, 1f)
+            logoCy = (logoCy + vy).coerceIn(0f, 1f)
             notifyLogo()
             return true
         }
@@ -195,9 +201,11 @@ class CameraOverlayView @JvmOverloads constructor(
         val cr = contentRect(tmpRect)
         if (cr.width() <= 0f) return
         var nx = ((x - cr.left) / cr.width()).coerceIn(0f, 1f)
-        if (mirrorX) nx = 1f - nx
+        var ny = ((y - cr.top) / cr.height()).coerceIn(0f, 1f)
+        if (dragFix >= 4) nx = 1f - nx
+        repeat(dragFix % 4) { val t = nx; nx = 1f - ny; ny = t }
         logoCx = nx
-        logoCy = ((y - cr.top) / cr.height()).coerceIn(0f, 1f)
+        logoCy = ny
         notifyLogo()
     }
 

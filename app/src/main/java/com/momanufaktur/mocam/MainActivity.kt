@@ -281,13 +281,8 @@ class MainActivity : AppCompatActivity() {
         videoMode = settings.videoMode
         processor.filter = Filters.ALL.getOrElse(settings.filterIndex) { Filters.ALL[0] }
         processor.logoEnabled = settings.logoEnabled
-        processor.logoCx = settings.logoCx
-        processor.logoCy = settings.logoCy
-        processor.logoW = settings.logoW
-        processor.logoAlpha = settings.logoAlpha
-        overlay.logoCx = settings.logoCx
-        overlay.logoCy = settings.logoCy
-        overlay.logoW = settings.logoW
+        settings.logoContext = logoContextKey()
+        loadLogoContextValues()
         overlay.showGrid = settings.grid
     }
 
@@ -345,7 +340,14 @@ class MainActivity : AppCompatActivity() {
             updateUi()
             bindCamera()
         }
-        btnLogo.setOnClickListener { openLogoPanel() }
+        btnLogo.setOnClickListener {
+            val on = !settings.logoEnabled
+            settings.logoEnabled = on
+            processor.logoEnabled = on
+            logoSwitch.isChecked = on
+            if (on && logoBitmap == null) toast("Noch kein Logo gewählt – ⚙️ → Logo einstellen")
+            updateUi()
+        }
         btnSettings.setOnClickListener {
             if (settingsPanel.visibility == View.VISIBLE) closeSettings() else openSettings()
         }
@@ -395,6 +397,7 @@ class MainActivity : AppCompatActivity() {
         logoSwitch.isChecked = settings.logoEnabled
         logoSwitch.setOnCheckedChangeListener { _, checked ->
             settings.logoEnabled = checked
+            updateUi()
             processor.logoEnabled = checked
         }
         logoPhotosSwitch.isChecked = settings.logoOnPhotos
@@ -415,6 +418,15 @@ class MainActivity : AppCompatActivity() {
             overlay.logoW = 0.30f
             overlay.onLogoChanged?.invoke(0.80f, 0.10f, 0.30f)
             overlay.invalidate()
+        }
+        findViewById<View>(R.id.btnDragRotate).setOnClickListener {
+            val v = settings.logoDragFix
+            settings.logoDragFix = (v / 4) * 4 + (v % 4 + 1) % 4
+            applyDragFix()
+        }
+        findViewById<View>(R.id.btnDragMirror).setOnClickListener {
+            settings.logoDragFix = (settings.logoDragFix + 4) % 8
+            applyDragFix()
         }
         findViewById<View>(R.id.btnLogoRotate).setOnClickListener {
             settings.logoRotation = (settings.logoRotation + 90) % 360
@@ -631,6 +643,7 @@ class MainActivity : AppCompatActivity() {
     private val isFrontCam get() = lensFacing == CameraSelector.LENS_FACING_FRONT
 
     private fun applyCameraFixes() {
+        switchLogoContext()
         processor.isFront = isFrontCam
         processor.frontMirror = settings.frontMirror
         processor.previewFix = settings.getFix(isFrontCam, Settings.TARGET_PREVIEW)
@@ -680,7 +693,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(
-            text("⚙️ Grundeinstellungen – " + if (front) "Frontkamera" else "Rückkamera", 17f, getColor(R.color.accent), true),
+            text("⚙️ Grundeinstellungen – " + logoContextName(), 17f, getColor(R.color.accent), true),
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
         header.addView(chip("⟲ Kamera wechseln") {
@@ -710,6 +723,13 @@ class MainActivity : AppCompatActivity() {
             }
             settingsContent.addView(sw)
         }
+
+        settingsContent.addView(chip("🏷 Logo einstellen – " + logoContextName()) {
+            openLogoPanel(fromSettings = true)
+        }.apply { setPadding(dp(14), dp(10), dp(14), dp(10)) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+
+        settingsContent.addView(text("Bild drehen/spiegeln", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(12), 0, 0) })
 
         listOf(
             Settings.TARGET_PREVIEW to "Vorschau",
@@ -996,7 +1016,7 @@ class MainActivity : AppCompatActivity() {
     private fun takePhoto() {
         val ic = imageCapture ?: return
         val filter = processor.filter
-        val logo = if (settings.logoEnabled && settings.logoOnPhotos) logoBitmap else null
+        val logo = if (settings.logoEnabled) logoBitmap else null
         // Drehen/Spiegeln macht MoCam selbst am fertigen Foto (Grundeinstellung + Frontkamera-Spiegel)
         val mirror = isFrontCam && settings.frontMirror
         val photoFix = settings.getFix(isFrontCam, Settings.TARGET_PHOTO)
@@ -1124,20 +1144,16 @@ class MainActivity : AppCompatActivity() {
     // Logo
     // =====================================================================
 
-    private fun openLogoPanel() {
-        // Logo wird ausschließlich mit der Rückkamera platziert
-        if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-            if (recording != null) {
-                toast("Logo bitte vor der Aufnahme mit der Rückkamera platzieren.")
-                return
-            }
-            lensFacing = CameraSelector.LENS_FACING_BACK
-            extensionMode = ExtensionMode.NONE
-            bindCamera()
-            toast("Logo wird mit der Rückkamera platziert – gilt für beide Kameras.")
-        }
+    private var logoPanelFromSettings = false
+
+    private fun openLogoPanel(fromSettings: Boolean = false) {
+        logoPanelFromSettings = fromSettings
+        settingsPanel.visibility = View.GONE
         bottomPanel.visibility = View.GONE
         logoPanel.visibility = View.VISIBLE
+        findViewById<TextView>(R.id.logoPanelTitle).text = "Logo – " + logoContextName()
+        logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
+        applyDragFix()
         overlay.editLogo = true
         if (!effectActive) toast("In diesem Modus keine Live-Vorschau des Logos.")
         if (logoBitmap == null) pickLogo.launch("image/*")
@@ -1145,8 +1161,47 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeLogoPanel() {
         logoPanel.visibility = View.GONE
-        bottomPanel.visibility = View.VISIBLE
         overlay.editLogo = false
+        if (logoPanelFromSettings) {
+            logoPanelFromSettings = false
+            openSettings()
+        } else {
+            bottomPanel.visibility = View.VISIBLE
+        }
+    }
+
+    // ---------------- Logo-Einstellungen je Kamera und Modus ----------------
+
+    private fun logoContextKey() = (if (isFrontCam) "front" else "rear") + "_" + (if (videoMode) "video" else "photo")
+
+    private fun logoContextName() =
+        (if (isFrontCam) "Frontkamera" else "Rückkamera") + " · " + (if (videoMode) "Video" else "Foto")
+
+    /** Lädt Position, Größe, Deckkraft und Drehung des Logos für die aktuelle Kamera und den Modus. */
+    private fun loadLogoContextValues() {
+        processor.logoCx = settings.logoCx
+        processor.logoCy = settings.logoCy
+        processor.logoW = settings.logoW
+        processor.logoAlpha = settings.logoAlpha
+        overlay.logoCx = settings.logoCx
+        overlay.logoCy = settings.logoCy
+        overlay.logoW = settings.logoW
+        overlay.dragFix = settings.logoDragFix
+        logoOriginal?.let { applyLogo(it) }
+    }
+
+    private fun switchLogoContext() {
+        val key = logoContextKey()
+        if (key == settings.logoContext) return
+        settings.logoContext = key
+        loadLogoContextValues()
+    }
+
+    private fun applyDragFix() {
+        overlay.dragFix = settings.logoDragFix
+        val v = settings.logoDragFix
+        findViewById<TextView>(R.id.dragFixLabel).text =
+            "Fingerrichtung: ${(v % 4) * 90}°" + if (v >= 4) " · gespiegelt" else ""
     }
 
     // ---------------- Logo-Bibliothek ----------------
@@ -1401,7 +1456,7 @@ class MainActivity : AppCompatActivity() {
         btnQuality.text = "🎞 " + qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].second
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
         btnExtension.text = "✨ " + extensionName(extensionMode)
-        btnLogo.text = "🏷 Logo"
+        btnLogo.text = if (settings.logoEnabled) "🏷 Logo an" else "🏷 Logo aus"
         btnFormat.text = "▭ " + currentFormat().label
         btnSettings.text = "⚙️"
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
