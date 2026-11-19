@@ -638,7 +638,8 @@ class MainActivity : AppCompatActivity() {
         }
         setupCameraControls(bound)
         overlay.drawLogoPreview = !effectActive
-        schedulePreviewMirrorCheck()
+        // Anzeige-Spiegelung der Frontkamera durch Android neutralisieren (siehe GlEffectProcessor)
+        previewView.scaleX = if (lensFacing == CameraSelector.LENS_FACING_FRONT && effectActive) -1f else 1f
         updateUi()
     }
 

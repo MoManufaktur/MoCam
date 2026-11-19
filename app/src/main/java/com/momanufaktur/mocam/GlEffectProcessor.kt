@@ -95,6 +95,7 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uWantMirror = 0
     private var uFlipImg = 0
     private var uLogoRot = 0
+    private var uDispFlip = 0
     private var uLogoFlip = 0
     private var curFlip = false
     private var uPRange = 0
@@ -295,6 +296,9 @@ class GlEffectProcessor : SurfaceProcessor {
         if (!isFront) unmirroredSign = sign
         val mirroredByCamera = isFront && sign != unmirroredSign
         GLES20.glUniform1f(uMirror, if (mirroredByCamera) 1f else 0f)
+        // Frontkamera: Android spiegelt die Vorschau-Anzeige zusätzlich. MoCam spiegelt das fertige
+        // Bild deshalb einmal selbst (für die Aufnahme) und die Anzeige wird in der App zurückgespiegelt.
+        GLES20.glUniform1f(uDispFlip, if (isFront) 1f else 0f)
         // Gewünschte Darstellung: Frontkamera nur gespiegelt, wenn eingestellt – in Vorschau UND Video
         GLES20.glUniform1f(uWantMirror, if (isFront && frontMirror) 1f else 0f)
 
@@ -398,6 +402,7 @@ class GlEffectProcessor : SurfaceProcessor {
         uWantMirror = GLES20.glGetUniformLocation(program, "uWantMirror")
         uFlipImg = GLES20.glGetUniformLocation(program, "uFlipImg")
         uLogoRot = GLES20.glGetUniformLocation(program, "uLogoRot")
+        uDispFlip = GLES20.glGetUniformLocation(program, "uDispFlip")
         uLogoFlip = GLES20.glGetUniformLocation(program, "uLogoFlip")
         uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
@@ -512,6 +517,7 @@ uniform float uAlpha;
 uniform float uWantMirror;
 uniform float uFlipImg;
 uniform float uLogoRot;
+uniform float uDispFlip;
 uniform float uLogoFlip;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
@@ -539,6 +545,7 @@ void main() {
     vec2 q = (toUpright(vS) - uPMin) / uPRange;
     vec2 d = q;
     if (uMirror > 0.5) d.x = 1.0 - d.x;
+    if (uDispFlip > 0.5) d.x = 1.0 - d.x;
 
     // Kamerabild so abtasten, dass es wie gewünscht (gespiegelt oder nicht) erscheint
     vec2 qs = d;
