@@ -287,6 +287,38 @@ class Settings(ctx: Context) {
         get() = bool("markers", false)
         set(v) = p.edit().putBoolean("markers", v).apply()
 
+    /** #1–#3 Pro-Modus (0 bzw. -1 = automatisch) */
+    var proIso: Int
+        get() = int("proIso", 0)
+        set(v) = p.edit().putInt("proIso", v).apply()
+
+    var proShutterNs: Long
+        get() = p.getLong("proShutter", 0L)
+        set(v) = p.edit().putLong("proShutter", v).apply()
+
+    /** 0 = Auto, 1..n = Preset-Index, >= 1000 = Kelvin */
+    var proWb: Int
+        get() = int("proWb", 0)
+        set(v) = p.edit().putInt("proWb", v).apply()
+
+    /** -1 = Autofokus, sonst 0 (unendlich) … 1 (nächste Distanz) */
+    var proFocus: Float
+        get() = float("proFocus", -1f)
+        set(v) = p.edit().putFloat("proFocus", v).apply()
+
+    var peaking: Boolean
+        get() = bool("peaking", false)
+        set(v) = p.edit().putBoolean("peaking", v).apply()
+
+    /** #13 Intervall-Fotos in Sekunden (0 = aus), #14 Belichtungsreihe (0, 3, 5) */
+    var photoInterval: Int
+        get() = int("photoInterval", 0)
+        set(v) = p.edit().putInt("photoInterval", v).apply()
+
+    var bracket: Int
+        get() = int("bracket", 0)
+        set(v) = p.edit().putInt("bracket", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

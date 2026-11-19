@@ -58,6 +58,8 @@ class FxState {
     @Volatile var lowerX = 0.04f
     /** #5 Zebra-Streifen (nur Vorschau). */
     @Volatile var zebra = false
+    /** #3 Fokus-Peaking (nur Vorschau). */
+    @Volatile var peaking = false
     @Volatile var lowerY = 0.86f
     @Volatile var lowerW = 0.80f
     /** #5 Zeitraffer: nur jedes n-te Bild ins Video, Zeitstempel zusammengeschoben. */
@@ -106,6 +108,8 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
     private var uLowerRect = 0
     private var uLowerAlpha = 0
     private var uZebra = 0
+    private var uPeak = 0
+    private var uTexel = 0
 
     // ---- EGL / GL ----
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -387,6 +391,8 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         val la = if (burnLogo && hasLower) LowerThird.alphaNow(state.lowerStartMs, state.lowerDurationMs) else 0f
         GLES20.glUniform1f(uLowerAlpha, la)
         GLES20.glUniform1f(uZebra, if (!burnLogo && state.zebra) 1f else 0f)
+        GLES20.glUniform1f(uPeak, if (!burnLogo && state.peaking) 1f else 0f)
+        GLES20.glUniform2f(uTexel, 1f / holder.w, 1f / holder.h)
         if (la > 0f) {
             val upright = out.size.width.toFloat() / out.size.height.toFloat()
             val w = state.lowerW
@@ -506,6 +512,8 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         uLowerRect = GLES20.glGetUniformLocation(program, "uLowerRect")
         uLowerAlpha = GLES20.glGetUniformLocation(program, "uLowerAlpha")
         uZebra = GLES20.glGetUniformLocation(program, "uZebra")
+        uPeak = GLES20.glGetUniformLocation(program, "uPeak")
+        uTexel = GLES20.glGetUniformLocation(program, "uTexel")
         glReady = program != 0
     }
 
@@ -617,6 +625,8 @@ uniform sampler2D uLower;
 uniform vec4 uLowerRect;
 uniform float uLowerAlpha;
 uniform float uZebra;
+uniform float uPeak;
+uniform vec2 uTexel;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
@@ -667,6 +677,15 @@ void main() {
 
     vec3 c = texture2D(uCam, tc).rgb;
     c = clamp(uColor * c + uOff, 0.0, 1.0);
+    // #3 Fokus-Peaking: scharfe Kanten rot markieren (nur Anzeige)
+    if (uPeak > 0.5) {
+        vec3 w = vec3(0.299, 0.587, 0.114);
+        float l0 = dot(texture2D(uCam, tc).rgb, w);
+        float lx = dot(texture2D(uCam, tc + vec2(uTexel.x * 1.5, 0.0)).rgb, w);
+        float ly = dot(texture2D(uCam, tc + vec2(0.0, uTexel.y * 1.5)).rgb, w);
+        float g = abs(lx - l0) + abs(ly - l0);
+        if (g > 0.10) c = mix(c, vec3(1.0, 0.1, 0.1), 0.85);
+    }
     // #5 Zebra: überbelichtete Stellen schraffieren (nur Anzeige)
     if (uZebra > 0.5) {
         float lum = dot(c, vec3(0.299, 0.587, 0.114));

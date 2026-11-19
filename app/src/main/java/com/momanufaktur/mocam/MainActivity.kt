@@ -97,6 +97,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var shareButtons: LinearLayout
     private lateinit var btnGrid: TextView
     private lateinit var btnZebra: TextView
+    private lateinit var btnPro: TextView
+    private lateinit var btnInterval: TextView
+    private lateinit var btnBracket: TextView
     private lateinit var btnHisto: TextView
     private lateinit var btnLevel: TextView
     private lateinit var btnMarkers: TextView
@@ -351,6 +354,9 @@ class MainActivity : AppCompatActivity() {
         shareButtons = findViewById(R.id.shareButtons)
         btnGrid = findViewById(R.id.btnGrid)
         btnZebra = findViewById(R.id.btnZebra)
+        btnPro = findViewById(R.id.btnPro)
+        btnInterval = findViewById(R.id.btnInterval)
+        btnBracket = findViewById(R.id.btnBracket)
         btnHisto = findViewById(R.id.btnHisto)
         btnLevel = findViewById(R.id.btnLevel)
         btnMarkers = findViewById(R.id.btnMarkers)
@@ -433,6 +439,37 @@ class MainActivity : AppCompatActivity() {
             updateUi()
         }
         btnMarker.setOnClickListener { addMarker() }
+        fxState.peaking = settings.peaking
+        btnPro.setOnClickListener { openProEditor() }
+        btnInterval.setOnClickListener {
+            if (intervalRunning) return@setOnClickListener
+            settings.photoInterval = when (settings.photoInterval) { 0 -> 2; 2 -> 5; 5 -> 10; 10 -> 30; 30 -> 60; else -> 0 }
+            if (settings.photoInterval > 0) toast("Auslöser startet eine Fotoserie alle ${settings.photoInterval} s – nochmal drücken stoppt")
+            updateUi()
+        }
+        btnBracket.setOnClickListener {
+            settings.bracket = when (settings.bracket) { 0 -> 3; 3 -> 5; else -> 0 }
+            if (settings.bracket > 0) toast("Belichtungsreihe: ${settings.bracket} Fotos mit je 1 EV Abstand")
+            updateUi()
+        }
+        // #13 Serienbild: Auslöser gedrückt halten (Foto)
+        shutter.setOnLongClickListener {
+            if (videoMode || recording != null) return@setOnLongClickListener false
+            burstActive = true
+            burstCount = 0
+            burstNext()
+            true
+        }
+        shutter.setOnTouchListener { _, e ->
+            if (e.actionMasked == android.view.MotionEvent.ACTION_UP || e.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+                if (burstActive) {
+                    burstActive = false
+                    toast("Serienbild: $burstCount Fotos")
+                    recIndicator.visibility = View.GONE
+                }
+            }
+            false
+        }
         overlay.onDoubleTap = { switchCamera() }
         overlay.onZoomScale = { factor ->
             camera?.let { cam ->
@@ -872,6 +909,7 @@ class MainActivity : AppCompatActivity() {
         }
         setupCameraControls(bound)
         overlay.drawLogoPreview = !effectActive
+        applyProSettings()
         applyPreviewMirror()
         updateUi()
     }
@@ -1342,8 +1380,11 @@ class MainActivity : AppCompatActivity() {
         if (settingsPanel.visibility == View.VISIBLE) closeSettings()
         if (videoMode) {
             if (recording != null) stopRecording() else withTimer { startRecording() }
-        } else {
-            withTimer { takePhoto() }
+        } else when {
+            intervalRunning -> stopInterval()
+            settings.photoInterval > 0 -> withTimer { startInterval() }
+            settings.bracket > 0 -> withTimer { runBracket() }
+            else -> withTimer { takePhoto() }
         }
     }
 
@@ -1372,7 +1413,7 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun takePhoto() {
+    private fun takePhoto(quiet: Boolean = false, onSaved: (() -> Unit)? = null) {
         val ic = imageCapture ?: return
         MediaStoreUtil.subFolder = currentFolder()
         val filter = processor.filter
@@ -1383,7 +1424,7 @@ class MainActivity : AppCompatActivity() {
         val needsProcessing = !filter.isIdentity || logo != null || mirror || photoFix != 0
         val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
 
-        flashScreen()
+        if (!quiet) flashScreen()
         sound.play(MediaActionSound.SHUTTER_CLICK)
 
         if (!needsProcessing) {
@@ -1395,9 +1436,11 @@ class MainActivity : AppCompatActivity() {
             ic.takePicture(opts, mainExec, object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     output.savedUri?.let { setLastMedia(it, false) }
+                    onSaved?.invoke()
                 }
                 override fun onError(e: ImageCaptureException) {
                     toast("Foto fehlgeschlagen: ${e.message}")
+                    onSaved?.invoke()
                 }
             })
         } else {
@@ -1421,12 +1464,14 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             if (uri != null) setLastMedia(uri, false)
                             else toast("Foto konnte nicht gespeichert werden.")
+                            onSaved?.invoke()
                         }
                     }
                 }
                 override fun onError(e: ImageCaptureException) {
                     tmp.delete()
                     toast("Foto fehlgeschlagen: ${e.message}")
+                    onSaved?.invoke()
                 }
             })
         }
@@ -2085,11 +2130,14 @@ class MainActivity : AppCompatActivity() {
         editorPanel.visibility = View.VISIBLE
     }
 
+    private var editorReturnToSettings = true
+
     private fun closeEditor() {
         editorPanel.visibility = View.GONE
         overlay.lowerPinned = false
         overlay.subPreviewText = null
-        openSettings()
+        if (editorReturnToSettings) openSettings() else bottomPanel.visibility = View.VISIBLE
+        editorReturnToSettings = true
     }
 
     /** Kopfzeile: „←“ zurück, Titel, „✓ Fertig“ – beide speichern (Einstellungen sind sofort gespeichert) und schließen. */
@@ -2367,6 +2415,243 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 status.text = if (ok) "Sprachmodell: bereit ✓" else "Download fehlgeschlagen – Internet prüfen"
                 if (ok && settingsPanel.visibility == View.VISIBLE) buildSettings()
+            }
+        }
+    }
+
+    // =====================================================================
+    // #13 Serienbild / Intervall, #14 Belichtungsreihe
+    // =====================================================================
+
+    private var burstActive = false
+    private var burstCount = 0
+    private var intervalRunning = false
+    private var intervalCount = 0
+    private val intervalHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun burstNext() {
+        if (!burstActive) return
+        takePhoto(quiet = true) {
+            burstCount++
+            recIndicator.visibility = View.VISIBLE
+            recIndicator.text = "📸 $burstCount"
+            if (burstActive) burstNext()
+        }
+    }
+
+    private val intervalShot = object : Runnable {
+        override fun run() {
+            if (!intervalRunning) return
+            takePhoto(quiet = true) {
+                intervalCount++
+                recIndicator.visibility = View.VISIBLE
+                recIndicator.text = "⏲ $intervalCount Fotos · alle ${settings.photoInterval} s"
+            }
+            intervalHandler.postDelayed(this, settings.photoInterval * 1000L)
+        }
+    }
+
+    private fun startInterval() {
+        intervalRunning = true
+        intervalCount = 0
+        shutter.setBackgroundResource(R.drawable.shutter_recording)
+        intervalShot.run()
+    }
+
+    private fun stopInterval() {
+        intervalRunning = false
+        intervalHandler.removeCallbacks(intervalShot)
+        recIndicator.visibility = View.GONE
+        toast("Intervall beendet: $intervalCount Fotos")
+        updateUi()
+    }
+
+    /** Belichtungsreihe: 3 oder 5 Fotos mit je 1 EV Abstand (über die Belichtungskorrektur). */
+    private fun runBracket() {
+        val cam = camera ?: return
+        val es = cam.cameraInfo.exposureState
+        if (!es.isExposureCompensationSupported || proManualExposure()) {
+            toast("Belichtungsreihe braucht automatische Belichtung")
+            takePhoto()
+            return
+        }
+        val step = es.exposureCompensationStep.toFloat().takeIf { it > 0f } ?: return
+        val base = es.exposureCompensationIndex
+        val range = es.exposureCompensationRange
+        val evs = if (settings.bracket == 5) listOf(-2, -1, 0, 1, 2) else listOf(-1, 0, 1)
+        val indices = evs.map { (base + Math.round(it / step)).coerceIn(range.lower, range.upper) }
+        toast("Belichtungsreihe: ${indices.size} Fotos …")
+        fun shot(i: Int) {
+            if (i >= indices.size) {
+                cam.cameraControl.setExposureCompensationIndex(base)
+                toast("Belichtungsreihe fertig")
+                return
+            }
+            cam.cameraControl.setExposureCompensationIndex(indices[i]).addListener({
+                // kurz warten, bis sich die Belichtung eingestellt hat
+                intervalHandler.postDelayed({ takePhoto(quiet = i > 0) { shot(i + 1) } }, 450)
+            }, mainExec)
+        }
+        shot(0)
+    }
+
+    // =====================================================================
+    // #1–#3 Pro-Modus (Camera2)
+    // =====================================================================
+
+    private val wbPresets = listOf(
+        "Auto" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO,
+        "☀ Tageslicht" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT,
+        "☁ Bewölkt" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT,
+        "🌳 Schatten" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_SHADE,
+        "💡 Glühlampe" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT,
+        "🔆 Leuchtstoff" to android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT
+    )
+
+    private fun proManualExposure() = settings.proIso > 0 || settings.proShutterNs > 0L
+    private fun proActive() = proManualExposure() || settings.proWb != 0 || settings.proFocus >= 0f
+
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun <T> characteristic(key: android.hardware.camera2.CameraCharacteristics.Key<T>): T? {
+        val cam = camera ?: return null
+        return try {
+            androidx.camera.camera2.interop.Camera2CameraInfo.from(cam.cameraInfo).getCameraCharacteristic(key)
+        } catch (e: Exception) { null }
+    }
+
+    private fun hasCapability(cap: Int): Boolean =
+        characteristic(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(cap) == true
+
+    /** Farbtemperatur (Kelvin) -> RGB nach Tanner Helland, für die Weißabgleich-Verstärkung. */
+    private fun kelvinToRgb(k: Int): FloatArray {
+        val t = k / 100.0
+        val r = if (t <= 66) 255.0 else (329.698727446 * Math.pow(t - 60, -0.1332047592)).coerceIn(0.0, 255.0)
+        val g = if (t <= 66) (99.4708025861 * Math.log(t) - 161.1195681661).coerceIn(0.0, 255.0)
+                else (288.1221695283 * Math.pow(t - 60, -0.0755148492)).coerceIn(0.0, 255.0)
+        val b = when { t >= 66 -> 255.0; t <= 19 -> 0.0
+            else -> (138.5177312231 * Math.log(t - 10) - 305.0447927307).coerceIn(0.0, 255.0) }
+        return floatArrayOf(r.toFloat().coerceAtLeast(1f), g.toFloat().coerceAtLeast(1f), b.toFloat().coerceAtLeast(1f))
+    }
+
+    /** Überträgt ISO, Verschlusszeit, Weißabgleich und Fokus an die Kamera (Camera2-Schnittstelle). */
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun applyProSettings() {
+        val cam = camera ?: return
+        val b = androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+        if (proManualExposure()) {
+            val isoRange = characteristic(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val expRange = characteristic(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val iso = (if (settings.proIso > 0) settings.proIso else 200).let { v -> isoRange?.let { v.coerceIn(it.lower, it.upper) } ?: v }
+            val exp = (if (settings.proShutterNs > 0) settings.proShutterNs else 16_666_666L).let { v -> expRange?.let { v.coerceIn(it.lower, it.upper) } ?: v }
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_OFF)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.SENSOR_SENSITIVITY, iso)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME, exp)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.SENSOR_FRAME_DURATION, maxOf(exp, 33_333_333L))
+        }
+        val wb = settings.proWb
+        if (wb in 1 until wbPresets.size) {
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE, wbPresets[wb].second)
+        } else if (wb >= 1000) {
+            val rgb = kelvinToRgb(wb)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.COLOR_CORRECTION_MODE, android.hardware.camera2.CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.COLOR_CORRECTION_GAINS,
+                android.hardware.camera2.params.RggbChannelVector(rgb[1] / rgb[0], 1f, 1f, rgb[1] / rgb[2]))
+        }
+        if (settings.proFocus >= 0f) {
+            val minDist = characteristic(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+            if (minDist > 0f) {
+                b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE, android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_OFF)
+                b.setCaptureRequestOption(android.hardware.camera2.CaptureRequest.LENS_FOCUS_DISTANCE, settings.proFocus * minDist)
+            }
+        }
+        try {
+            androidx.camera.camera2.interop.Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(b.build())
+        } catch (e: Exception) {
+            Log.w(TAG, "Pro-Einstellungen", e)
+        }
+    }
+
+    private fun shutterLabel(ns: Long): String =
+        if (ns >= 1_000_000_000L) String.format("%.1f s", ns / 1e9) else "1/${Math.round(1e9 / ns)}"
+
+    private fun openProEditor() {
+        editorReturnToSettings = false
+        openEditor("🎛 Pro-Modus") {
+            val manualSensor = hasCapability(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+            val manualPost = hasCapability(android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
+            val minDist = characteristic(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+            editorContent.addView(uiText(
+                "Diese Kamera erlaubt: " + listOfNotNull(
+                    if (manualSensor) "ISO/Verschluss" else null,
+                    if (manualPost) "Kelvin-Weißabgleich" else null,
+                    if (minDist > 0f) "manueller Fokus" else null,
+                    "Weißabgleich-Presets"
+                ).joinToString(", "), 12f, Color.argb(200, 255, 255, 255)))
+
+            // ---- #1 ISO & Verschluss ----
+            uiSection("ISO")
+            if (manualSensor) {
+                val r = characteristic(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                val isos = listOf(0, 50, 100, 200, 400, 800, 1600, 3200, 6400).filter { it == 0 || r == null || it in r.lower..r.upper }
+                uiChoice(isos.map { if (it == 0) "Auto" else "$it" }, isos.indexOf(settings.proIso).coerceAtLeast(0)) { i ->
+                    settings.proIso = isos[i]; applyProSettings(); updateUi()
+                }
+                uiSection("Verschlusszeit")
+                val er = characteristic(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                val times = listOf(0L, 125_000L, 250_000L, 500_000L, 1_000_000L, 2_000_000L, 4_000_000L, 8_000_000L,
+                    10_000_000L, 16_666_666L, 20_000_000L, 33_333_333L, 66_666_666L, 125_000_000L, 250_000_000L)
+                    .filter { it == 0L || er == null || it in er.lower..er.upper }
+                uiChoice(times.map { if (it == 0L) "Auto" else shutterLabel(it) }, times.indexOf(settings.proShutterNs).coerceAtLeast(0)) { i ->
+                    settings.proShutterNs = times[i]; applyProSettings(); updateUi()
+                }
+                editorContent.addView(uiText("Tipp Film-Look: 1/50 bei 25 fps, 1/60 bei 30 fps. Länger als 1/30 ruckelt im Video.",
+                    11f, Color.argb(170, 255, 255, 255)))
+            } else {
+                editorContent.addView(uiText("Huawei gibt ISO und Verschlusszeit für diese Kamera nicht frei. Belichtung über ☀ (EV) steuern.",
+                    12f, Color.argb(200, 255, 255, 255)))
+            }
+
+            // ---- #2 Weißabgleich ----
+            uiSection("Weißabgleich")
+            uiChoice(wbPresets.map { it.first }, if (settings.proWb in wbPresets.indices) settings.proWb else -1) { i ->
+                settings.proWb = i; applyProSettings(); updateUi()
+            }
+            if (manualPost) {
+                val kelvin = if (settings.proWb >= 1000) settings.proWb else 5500
+                uiSlider("Kelvin ${kelvin} K", 0f, 1f, (kelvin - 2000) / 8000f) { v ->
+                    settings.proWb = (2000 + v * 8000).toInt() / 100 * 100
+                    applyProSettings(); updateUi()
+                }
+            }
+
+            // ---- #3 Fokus ----
+            uiSection("Fokus")
+            if (minDist > 0f) {
+                uiChoice(listOf("Autofokus", "Manuell"), if (settings.proFocus < 0f) 0 else 1) { i ->
+                    settings.proFocus = if (i == 0) -1f else 0.5f
+                    applyProSettings(); updateUi()
+                    openProEditor()
+                }
+                if (settings.proFocus >= 0f) {
+                    uiSlider("Unendlich ↔ Nah", 0f, 1f, settings.proFocus) { v ->
+                        settings.proFocus = v; applyProSettings()
+                    }
+                }
+            } else {
+                editorContent.addView(uiText("Manueller Fokus wird von dieser Kamera nicht unterstützt.", 12f, Color.argb(200, 255, 255, 255)))
+            }
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "Fokus-Peaking (scharfe Kanten rot)"
+                setTextColor(Color.WHITE)
+                isChecked = settings.peaking
+                setOnCheckedChangeListener { _, c -> settings.peaking = c; fxState.peaking = c }
+            })
+
+            uiButtons {
+                settings.proIso = 0; settings.proShutterNs = 0L; settings.proWb = 0; settings.proFocus = -1f
+                applyProSettings(); updateUi()
+                openProEditor()
             }
         }
     }
@@ -2755,6 +3040,11 @@ class MainActivity : AppCompatActivity() {
         audioLevel.visibility = if (rec && settings.audio && settings.timelapse == 0) View.VISIBLE else View.GONE
         btnGrid.text = if (settings.grid) "▦ Raster an" else "▦ Raster aus"
         btnZebra.text = if (settings.zebra) "🦓 Zebra an" else "🦓 Zebra aus"
+        btnPro.text = if (proActive()) "🎛 Pro aktiv" else "🎛 Pro"
+        btnInterval.text = if (settings.photoInterval == 0) "⏲ Intervall aus" else "⏲ alle ${settings.photoInterval} s"
+        btnInterval.visibility = if (videoMode) View.GONE else View.VISIBLE
+        btnBracket.text = if (settings.bracket == 0) "🎚 Reihe aus" else "🎚 Reihe ${settings.bracket}×"
+        btnBracket.visibility = if (videoMode) View.GONE else View.VISIBLE
         btnHisto.text = if (settings.histogram) "📊 Histogramm an" else "📊 Histogramm aus"
         btnLevel.text = if (settings.level) "📐 Wasserwaage an" else "📐 Wasserwaage aus"
         btnMarkers.text = if (settings.markers) "🔖 Marker an" else "🔖 Marker aus"

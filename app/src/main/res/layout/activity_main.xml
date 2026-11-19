@@ -121,6 +121,9 @@
 
                 <TextView android:id="@+id/btnSettings" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFlash" style="@style/TopChip" />
+                <TextView android:id="@+id/btnPro" style="@style/TopChip" />
+                <TextView android:id="@+id/btnInterval" style="@style/TopChip" />
+                <TextView android:id="@+id/btnBracket" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFormat" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLimit" style="@style/TopChip" />
