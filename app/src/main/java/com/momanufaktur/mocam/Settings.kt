@@ -146,6 +146,23 @@ class Settings(ctx: Context) {
         get() = li("logoRotation", 0)
         set(v) = p.edit().putInt(lk("logoRotation"), v).apply()
 
+    /** #1 Zeitlimit für Videos in Sekunden (0 = aus). */
+    var timeLimit: Int
+        get() = int("timeLimit", 0)
+        set(v) = p.edit().putInt("timeLimit", v).apply()
+
+    /** #2 Projektordner: Liste der angelegten Ordner und Zuordnung Logo -> Ordner. */
+    var folders: Set<String>
+        get() = p.getStringSet("folders", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("folders", HashSet(v)).apply()
+
+    fun folderForLogo(logoFile: String?): String =
+        if (logoFile == null) "" else p.getString("logoFolder_$logoFile", "") ?: ""
+
+    fun setFolderForLogo(logoFile: String, folder: String) {
+        p.edit().putString("logoFolder_$logoFile", folder).apply()
+    }
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

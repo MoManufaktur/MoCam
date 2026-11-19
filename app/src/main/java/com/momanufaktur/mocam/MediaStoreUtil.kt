@@ -25,6 +25,15 @@ object MediaStoreUtil {
 
     const val FOLDER = "MoCam"
 
+    /** Projektordner unterhalb von MoCam (leer = direkt in MoCam). Wird vor jeder Aufnahme gesetzt. */
+    @Volatile var subFolder: String = ""
+
+    private fun folderPath() = if (subFolder.isBlank()) FOLDER else "$FOLDER/$subFolder"
+
+    /** Erlaubte Ordnernamen: keine Pfadzeichen. */
+    fun sanitizeFolder(name: String): String =
+        name.trim().replace(Regex("[\\\\/:*?\"<>|]"), "").take(40)
+
     fun fileName(prefix: String): String =
         prefix + "_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
 
@@ -32,7 +41,7 @@ object MediaStoreUtil {
         put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.jpg")
         put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + FOLDER)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + folderPath())
         }
     }
 
@@ -40,7 +49,7 @@ object MediaStoreUtil {
         put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.mp4")
         put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + FOLDER)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + folderPath())
         }
     }
 
@@ -117,7 +126,7 @@ object MediaStoreUtil {
             return uri
         } else {
             @Suppress("DEPRECATION")
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), FOLDER)
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), folderPath())
             dir.mkdirs()
             val file = File(dir, "$name.jpg")
             file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }

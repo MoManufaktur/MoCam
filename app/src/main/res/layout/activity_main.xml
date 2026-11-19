@@ -121,6 +121,7 @@
                 <TextView android:id="@+id/btnFlash" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFormat" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
+                <TextView android:id="@+id/btnLimit" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />
                 <TextView android:id="@+id/btnAudio" style="@style/TopChip" />
@@ -158,6 +159,24 @@
         android:orientation="vertical"
         android:paddingTop="6dp"
         android:paddingBottom="14dp">
+
+        <!-- #3 Teilen nach der Aufnahme -->
+        <HorizontalScrollView
+            android:id="@+id/shareBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/shareButtons"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+        </HorizontalScrollView>
 
         <LinearLayout
             android:id="@+id/exposureRow"
@@ -376,6 +395,25 @@
             android:text="Antippen = auswählen · lange drücken = löschen"
             android:textColor="#88FFFFFF"
             android:textSize="11sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/logoFolderLabel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="📁 Ordner: MoCam"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+            <TextView android:id="@+id/btnLogoFolder" style="@style/TopChip" android:layout_marginEnd="0dp" android:text="Ordner wählen" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"

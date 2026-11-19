@@ -81,6 +81,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bottomPanel: View
     private lateinit var btnFlash: TextView
     private lateinit var btnTimer: TextView
+    private lateinit var btnLimit: TextView
+    private lateinit var shareBar: View
+    private lateinit var shareButtons: LinearLayout
     private lateinit var btnGrid: TextView
     private lateinit var btnQuality: TextView
     private lateinit var btnAudio: TextView
@@ -248,6 +251,9 @@ class MainActivity : AppCompatActivity() {
         bottomPanel = findViewById(R.id.bottomPanel)
         btnFlash = findViewById(R.id.btnFlash)
         btnTimer = findViewById(R.id.btnTimer)
+        btnLimit = findViewById(R.id.btnLimit)
+        shareBar = findViewById(R.id.shareBar)
+        shareButtons = findViewById(R.id.shareButtons)
         btnGrid = findViewById(R.id.btnGrid)
         btnQuality = findViewById(R.id.btnQuality)
         btnAudio = findViewById(R.id.btnAudio)
@@ -319,6 +325,18 @@ class MainActivity : AppCompatActivity() {
 
         // Obere Leiste
         btnFlash.setOnClickListener { cycleFlash() }
+        btnLimit.setOnClickListener {
+            if (recording != null) return@setOnClickListener
+            settings.timeLimit = when (settings.timeLimit) { 0 -> 15; 15 -> 30; 30 -> 60; 60 -> 90; else -> 0 }
+            if (settings.timeLimit > 0) toast("Video stoppt automatisch nach ${settings.timeLimit} s")
+            updateUi()
+        }
+        findViewById<View>(R.id.btnLogoFolder).setOnClickListener { chooseFolderForLogo() }
+        galleryThumb.setOnLongClickListener {
+            lastMediaUri?.let { showShareBar(it, lastMediaIsVideo) }
+            true
+        }
+        buildShareButtons()
         btnTimer.setOnClickListener {
             settings.timer = when (settings.timer) { 0 -> 3; 3 -> 10; else -> 0 }
             updateUi()
@@ -1073,6 +1091,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun takePhoto() {
         val ic = imageCapture ?: return
+        MediaStoreUtil.subFolder = currentFolder()
         val filter = processor.filter
         val logo = if (settings.logoEnabled) logoBitmap else null
         // Drehen/Spiegeln macht MoCam selbst am fertigen Foto (Grundeinstellung + Frontkamera-Spiegel)
@@ -1134,6 +1153,7 @@ class MainActivity : AppCompatActivity() {
     @androidx.annotation.OptIn(ExperimentalPersistentRecording::class)
     private fun startRecording() {
         val vc = videoCapture ?: return
+        MediaStoreUtil.subFolder = currentFolder()
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
             .build()
@@ -1162,7 +1182,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 is VideoRecordEvent.Status -> {
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
-                    recIndicator.text = String.format("%s %02d:%02d", if (isPaused) "❚❚" else "●", s / 60, s % 60)
+                    val limit = settings.timeLimit
+                    recIndicator.text = if (limit > 0) {
+                        val left = (limit - s).coerceAtLeast(0)
+                        String.format("%s %02d:%02d · noch %d s", if (isPaused) "❚❚" else "●", s / 60, s % 60, left)
+                    } else {
+                        String.format("%s %02d:%02d", if (isPaused) "❚❚" else "●", s / 60, s % 60)
+                    }
+                    if (limit > 0 && s >= limit) stopRecording()
                 }
                 is VideoRecordEvent.Finalize -> {
                     sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
@@ -1335,6 +1362,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLogoPanel() {
+        updateFolderLabel()
         findViewById<TextView>(R.id.logoPanelTitle).text = "Logo – " + logoContextName()
         logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
         buildLogoTabs()
@@ -1457,6 +1485,7 @@ class MainActivity : AppCompatActivity() {
                 settings.selectedLogo = file.name
                 loadedLogoName = file.name
                 applyLogo(bmp)
+                updateFolderLabel()
                 enableLogo()
                 refreshLogoLibrary()
             }
@@ -1561,10 +1590,133 @@ class MainActivity : AppCompatActivity() {
     private fun setLastMedia(uri: Uri, isVideo: Boolean) {
         lastMediaUri = uri
         lastMediaIsVideo = isVideo
+        showShareBar(uri, isVideo)
         bg.execute {
             val thumb = MediaStoreUtil.loadThumbnail(this, uri, isVideo)
             runOnUiThread { if (thumb != null) galleryThumb.setImageBitmap(thumb) }
         }
+    }
+
+    // =====================================================================
+    // #2 Projektordner (pro Logo)
+    // =====================================================================
+
+    /** Ordner der aktuellen Aufnahme: der des gewählten Logos, wenn das Logo an ist. */
+    private fun currentFolder(): String =
+        if (settings.logoEnabled && logoBitmap != null) settings.folderForLogo(settings.selectedLogo) else ""
+
+    private fun folderLabel(f: String) = if (f.isBlank()) "MoCam" else "MoCam/$f"
+
+    private fun updateFolderLabel() {
+        val f = settings.folderForLogo(settings.selectedLogo)
+        findViewById<TextView>(R.id.logoFolderLabel).text = "📁 Ordner: " + folderLabel(f)
+    }
+
+    private fun chooseFolderForLogo() {
+        val logo = settings.selectedLogo
+        if (logo == null) {
+            toast("Bitte zuerst ein Logo wählen.")
+            return
+        }
+        val folders = settings.folders.sorted()
+        val items = (listOf("MoCam (kein Unterordner)") + folders.map { "📁 $it" } + listOf("+ Neuer Ordner …")).toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Ordner für dieses Logo")
+            .setItems(items) { _, which ->
+                when {
+                    which == 0 -> { settings.setFolderForLogo(logo, ""); updateFolderLabel() }
+                    which <= folders.size -> { settings.setFolderForLogo(logo, folders[which - 1]); updateFolderLabel() }
+                    else -> createFolder(logo)
+                }
+            }
+            .show()
+    }
+
+    private fun createFolder(logo: String) {
+        val input = EditText(this).apply {
+            hint = "z. B. MMES oder Kunde Müller"
+            setSingleLine()
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Neuer Ordner")
+            .setView(input)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Anlegen") { _, _ ->
+                val name = MediaStoreUtil.sanitizeFolder(input.text.toString())
+                if (name.isBlank()) {
+                    toast("Bitte einen Namen eingeben.")
+                } else {
+                    settings.folders = settings.folders + name
+                    settings.setFolderForLogo(logo, name)
+                    updateFolderLabel()
+                    toast("Ordner „$name“ angelegt – Aufnahmen mit diesem Logo landen in MoCam/$name")
+                }
+            }
+            .show()
+    }
+
+    // =====================================================================
+    // #3 Direkt teilen
+    // =====================================================================
+
+    private var shareUri: Uri? = null
+    private var shareIsVideo = false
+    private val hideShareBar = Runnable { shareBar.visibility = View.GONE }
+
+    private fun buildShareButtons() {
+        shareButtons.removeAllViews()
+        listOf(
+            "🟢 WhatsApp Status" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+            "📸 Instagram" to listOf("com.instagram.android"),
+            "💼 LinkedIn" to listOf("com.linkedin.android"),
+            "📌 Pinterest" to listOf("com.pinterest"),
+            "⋯ Mehr" to emptyList()
+        ).forEach { (label, pkgs) ->
+            val tv = TextView(this).apply {
+                text = label
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setBackgroundResource(R.drawable.chip_bg)
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                setOnClickListener { shareTo(pkgs) }
+            }
+            shareButtons.addView(tv, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(6) })
+        }
+    }
+
+    private fun showShareBar(uri: Uri, isVideo: Boolean) {
+        shareUri = uri
+        shareIsVideo = isVideo
+        shareBar.visibility = View.VISIBLE
+        shareBar.removeCallbacks(hideShareBar)
+        shareBar.postDelayed(hideShareBar, 12000)
+    }
+
+    private fun shareTo(packages: List<String>) {
+        val uri = shareUri ?: return
+        val base = Intent(Intent.ACTION_SEND).apply {
+            type = if (shareIsVideo) "video/mp4" else "image/jpeg"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        shareBar.visibility = View.GONE
+        if (packages.isEmpty()) {
+            startActivity(Intent.createChooser(base, "Teilen"))
+            return
+        }
+        for (pkg in packages) {
+            try {
+                startActivity(Intent(base).setPackage(pkg))
+                return
+            } catch (e: ActivityNotFoundException) {
+                // nächstes Paket probieren
+            }
+        }
+        toast("App nicht installiert – öffne Auswahl")
+        startActivity(Intent.createChooser(base, "Teilen"))
     }
 
     private fun openLastMedia() {
@@ -1609,6 +1761,8 @@ class MainActivity : AppCompatActivity() {
             else -> "⚡ Blitz aus"
         }
         btnTimer.text = if (settings.timer == 0) "⏱ Timer aus" else "⏱ ${settings.timer}s"
+        btnLimit.text = if (settings.timeLimit == 0) "⏳ Limit aus" else "⏳ ${settings.timeLimit}s"
+        btnLimit.visibility = if (videoMode) View.VISIBLE else View.GONE
         btnGrid.text = if (settings.grid) "▦ Raster an" else "▦ Raster aus"
         btnQuality.text = "🎞 " + qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].second
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
