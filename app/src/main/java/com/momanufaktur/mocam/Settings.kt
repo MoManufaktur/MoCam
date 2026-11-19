@@ -77,6 +77,19 @@ class Settings(ctx: Context) {
         get() = int("frontOrientation", 2)
         set(v) = p.edit().putInt("frontOrientation", v).apply()
 
+    /** Frontkamera im Videomodus: Position (0..7) und Lage des Logos (0..7) – getrennt vom Foto. */
+    var frontOrientationVideo: Int
+        get() = int("frontOrientationVideo", 2)
+        set(v) = p.edit().putInt("frontOrientationVideo", v).apply()
+
+    var frontLogoPhoto: Int
+        get() = int("frontLogoPhoto", 0)
+        set(v) = p.edit().putInt("frontLogoPhoto", v).apply()
+
+    var frontLogoVideo: Int
+        get() = int("frontLogoVideo", 0)
+        set(v) = p.edit().putInt("frontLogoVideo", v).apply()
+
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?
         get() = p.getString("selectedLogo", null)

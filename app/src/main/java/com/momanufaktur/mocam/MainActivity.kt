@@ -89,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnFormat: TextView
     private lateinit var btnMirror: TextView
     private lateinit var btnFrontAlign: TextView
+    private lateinit var btnFrontLogo: TextView
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -250,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         btnFormat = findViewById(R.id.btnFormat)
         btnMirror = findViewById(R.id.btnMirror)
         btnFrontAlign = findViewById(R.id.btnFrontAlign)
+        btnFrontLogo = findViewById(R.id.btnFrontLogo)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -345,15 +347,22 @@ class MainActivity : AppCompatActivity() {
         }
         btnLogo.setOnClickListener { openLogoPanel() }
         btnFrontAlign.setOnClickListener {
-            settings.frontOrientation = (settings.frontOrientation + 1) % 8
-            processor.frontOrientation = settings.frontOrientation
-            toast("Ausrichtung ${settings.frontOrientation + 1}/8 – tippen, bis das Logo wie bei der Rückkamera steht")
+            val v = (frontPos() + 1) % 8
+            if (videoMode) settings.frontOrientationVideo = v else settings.frontOrientation = v
+            applyFrontCalibration()
+            toast("Position ${v + 1}/8 (${if (videoMode) "Video" else "Foto"}) – tippen, bis das Logo an der richtigen Stelle steht")
+            updateUi()
+        }
+        btnFrontLogo.setOnClickListener {
+            val v = (frontLogo() + 1) % 8
+            if (videoMode) settings.frontLogoVideo = v else settings.frontLogoPhoto = v
+            applyFrontCalibration()
+            toast("Logo-Lage ${v + 1}/8: ${logoVariantName(v)}")
             updateUi()
         }
         btnMirror.setOnClickListener {
             settings.frontMirror = !settings.frontMirror
             processor.frontMirror = settings.frontMirror
-        processor.frontOrientation = settings.frontOrientation
             toast(if (settings.frontMirror) "Frontkamera: gespiegelt (wie ein Spiegel)" else "Frontkamera: ungespiegelt (wie andere dich sehen)")
             updateUi()
         }
@@ -527,6 +536,7 @@ class MainActivity : AppCompatActivity() {
         overlay.mirrorX = false
         processor.isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
         processor.frontMirror = settings.frontMirror
+        applyFrontCalibration()
         val fmt = currentFormat()
         overlay.contentAspect = fmt.w.toFloat() / fmt.h
         applyRotation()
@@ -655,6 +665,21 @@ class MainActivity : AppCompatActivity() {
         val det = values[0] * values[4] - values[1] * values[3]
         val mirrored = det * tv.scaleX * tv.scaleY < 0f
         previewView.scaleX = if (mirrored) -1f else 1f
+    }
+
+    // ---------- Kalibrierung Frontkamera (getrennt für Foto und Video) ----------
+
+    private fun frontPos() = if (videoMode) settings.frontOrientationVideo else settings.frontOrientation
+    private fun frontLogo() = if (videoMode) settings.frontLogoVideo else settings.frontLogoPhoto
+
+    private fun applyFrontCalibration() {
+        processor.frontOrientation = frontPos()
+        processor.frontLogoVariant = frontLogo()
+    }
+
+    private fun logoVariantName(v: Int): String {
+        val rot = (v % 4) * 90
+        return (if (rot == 0) "normal" else "$rot° gedreht") + if (v >= 4) ", gespiegelt" else ""
     }
 
     private fun tryBind(provider: ProcessCameraProvider, selector: CameraSelector, group: UseCaseGroup): Camera? =
@@ -1305,8 +1330,10 @@ class MainActivity : AppCompatActivity() {
         btnFormat.text = "▭ " + currentFormat().label
         btnMirror.text = if (settings.frontMirror) "🪞 Spiegeln an" else "🪞 Spiegeln aus"
         btnMirror.visibility = if (lensFacing == CameraSelector.LENS_FACING_FRONT) View.VISIBLE else View.GONE
-        btnFrontAlign.text = "🧭 Ausrichtung ${settings.frontOrientation + 1}/8"
+        btnFrontAlign.text = "🧭 Position ${frontPos() + 1}/8"
         btnFrontAlign.visibility = btnMirror.visibility
+        btnFrontLogo.text = "🔄 Logo ${frontLogo() + 1}/8"
+        btnFrontLogo.visibility = btnMirror.visibility
         btnFormat.alpha = if (rec) 0.4f else 1f
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
         btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE

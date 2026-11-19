@@ -61,6 +61,8 @@ class GlEffectProcessor : SurfaceProcessor {
      * Mate 20 Pro: Wert 2 (Anzeige „3/8“) auf dem Gerät bestätigt.
      */
     @Volatile var frontOrientation = 2
+    /** Lage des Logos selbst bei der Frontkamera (0..7): Drehung = (Wert % 4) * 90°, ab 4 gespiegelt. */
+    @Volatile var frontLogoVariant = 0
     /** Vorzeichen der Abbildung für ungespiegelte Ausgaben – wird an der Rückkamera gelernt. */
     private var unmirroredSign = -1f
 
@@ -92,6 +94,8 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uMirror = 0
     private var uWantMirror = 0
     private var uFlipImg = 0
+    private var uLogoRot = 0
+    private var uLogoFlip = 0
     private var curFlip = false
     private var uPRange = 0
     private var logoTex = 0
@@ -302,8 +306,13 @@ class GlEffectProcessor : SurfaceProcessor {
             val upW = if (uAlongX) out.size.width else out.size.height
             val upH = if (uAlongX) out.size.height else out.size.width
             val upright = upW.toFloat() / upH.toFloat()
+            val lv = if (isFront) frontLogoVariant else 0
+            val lRot = lv % 4
+            GLES20.glUniform1f(uLogoRot, lRot.toFloat())
+            GLES20.glUniform1f(uLogoFlip, if (lv >= 4) 1f else 0f)
+            val shownAspect = if (lRot % 2 == 1) 1f / logoAspect else logoAspect
             val w = logoW
-            val h = w * logoAspect * upright
+            val h = w * shownAspect * upright
             GLES20.glUniform4f(uRect, logoCx - w / 2f, logoCy - h / 2f, w, h)
             GLES20.glUniform1f(uAlpha, logoAlpha)
         }
@@ -388,6 +397,8 @@ class GlEffectProcessor : SurfaceProcessor {
         uMirror = GLES20.glGetUniformLocation(program, "uMirror")
         uWantMirror = GLES20.glGetUniformLocation(program, "uWantMirror")
         uFlipImg = GLES20.glGetUniformLocation(program, "uFlipImg")
+        uLogoRot = GLES20.glGetUniformLocation(program, "uLogoRot")
+        uLogoFlip = GLES20.glGetUniformLocation(program, "uLogoFlip")
         uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
         val t = IntArray(1)
@@ -500,6 +511,8 @@ uniform vec2 uPRange;
 uniform float uAlpha;
 uniform float uWantMirror;
 uniform float uFlipImg;
+uniform float uLogoRot;
+uniform float uLogoFlip;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
@@ -538,7 +551,13 @@ void main() {
     if (uHasLogo > 0.5) {
         vec2 luv = (d - uRect.xy) / uRect.zw;
         if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
-            vec4 l = texture2D(uLogo, luv);
+            // Lage des Logos (Frontkamera-Korrektur): spiegeln, dann in 90°-Schritten drehen
+            vec2 t = luv;
+            if (uLogoFlip > 0.5) t.x = 1.0 - t.x;
+            if (uLogoRot > 0.5 && uLogoRot < 1.5) t = vec2(t.y, 1.0 - t.x);
+            else if (uLogoRot > 1.5 && uLogoRot < 2.5) t = vec2(1.0 - t.x, 1.0 - t.y);
+            else if (uLogoRot > 2.5) t = vec2(1.0 - t.y, t.x);
+            vec4 l = texture2D(uLogo, t);
             float a = l.a * uAlpha;
             c = c * (1.0 - a) + l.rgb * uAlpha;
         }
