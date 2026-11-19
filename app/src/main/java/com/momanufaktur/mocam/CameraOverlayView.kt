@@ -82,6 +82,32 @@ class CameraOverlayView @JvmOverloads constructor(
     var onLogoChanged: ((cx: Float, cy: Float, w: Float) -> Unit)? = null
     var onTap: ((x: Float, y: Float) -> Unit)? = null
     var onDoubleTap: (() -> Unit)? = null
+    /** #4 Lange drücken = AE/AF-Sperre */
+    var onLongPress: ((x: Float, y: Float) -> Unit)? = null
+
+    /** #4 Anzeige der Sperre */
+    var lockText: String? = null
+        set(v) { field = v; invalidate() }
+    private var lockX = 0f
+    private var lockY = 0f
+    fun showLock(x: Float, y: Float) { lockX = x; lockY = y; lockText = "🔒 AE/AF"; }
+
+    /** #6 Histogramm (64 Werte, 0..1) */
+    var histogram: FloatArray? = null
+        set(v) { field = v; invalidate() }
+
+    /** #7 Wasserwaage: Neigung in Grad (null = aus) */
+    var levelAngle: Float? = null
+        set(v) { field = v; invalidate() }
+
+    private val histoBg = Paint().apply { color = Color.argb(120, 0, 0, 0) }
+    private val histoPaint = Paint().apply { color = Color.argb(220, 255, 255, 255) }
+    private val levelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 2.5f * resources.displayMetrics.density }
+    private val levelText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 14f * resources.displayMetrics.density
+        textAlign = Paint.Align.CENTER
+        setShadowLayer(4f, 0f, 0f, Color.BLACK)
+    }
     var onZoomScale: ((factor: Float) -> Unit)? = null
 
     private val density = resources.displayMetrics.density
@@ -183,6 +209,44 @@ class CameraOverlayView @JvmOverloads constructor(
             val cr = contentRect(tmpRect)
             drawCaption(canvas, t, cr.left, cr.top, cr.width(), cr.height(), subStyle)
         }
+        // #6 Histogramm oben links im Bild
+        histogram?.let { h ->
+            val cr = contentRect(tmpRect)
+            val d = resources.displayMetrics.density
+            val w = 130 * d
+            val hh = 60 * d
+            val l = cr.left + 8 * d
+            val t = cr.top + 8 * d
+            canvas.drawRect(l, t, l + w, t + hh, histoBg)
+            val bw = w / h.size
+            for (i in h.indices) {
+                val bh = h[i] * (hh - 4 * d)
+                canvas.drawRect(l + i * bw, t + hh - 2 * d - bh, l + (i + 1) * bw - 0.5f, t + hh - 2 * d, histoPaint)
+            }
+        }
+        // #7 Wasserwaage in der Bildmitte
+        levelAngle?.let { a ->
+            val cx = width / 2f
+            val cy = height / 2f
+            val len = width * 0.32f
+            val ok = kotlin.math.abs(a) < 1f
+            levelPaint.color = if (ok) Color.rgb(76, 175, 80) else Color.WHITE
+            canvas.save()
+            canvas.rotate(-a, cx, cy)
+            canvas.drawLine(cx - len, cy, cx - 18 * density, cy, levelPaint)
+            canvas.drawLine(cx + 18 * density, cy, cx + len, cy, levelPaint)
+            canvas.restore()
+            levelPaint.color = Color.argb(140, 255, 255, 255)
+            canvas.drawLine(cx - len - 14 * density, cy, cx - len - 4 * density, cy, levelPaint)
+            canvas.drawLine(cx + len + 4 * density, cy, cx + len + 14 * density, cy, levelPaint)
+            levelText.color = if (ok) Color.rgb(76, 175, 80) else Color.WHITE
+            canvas.drawText(String.format("%.1f°", a), cx, cy - 12 * density, levelText)
+        }
+        // #4 Sperre
+        lockText?.let { t ->
+            canvas.drawCircle(lockX, lockY, 36f * density, focusPaint)
+            canvas.drawText(t, lockX, lockY - 44f * density, textPaint)
+        }
         if (editLogo && !hasLogo) {
             canvas.drawText("Bitte zuerst ein Logo wählen", width / 2f, height / 3f, textPaint)
         }
@@ -217,6 +281,10 @@ class CameraOverlayView @JvmOverloads constructor(
                 onTap?.invoke(e.x, e.y)
             }
             return true
+        }
+
+        override fun onLongPress(e: MotionEvent) {
+            if (!editLogo) onLongPress?.invoke(e.x, e.y)
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {

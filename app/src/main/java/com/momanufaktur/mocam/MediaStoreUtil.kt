@@ -136,6 +136,28 @@ object MediaStoreUtil {
         }
     }
 
+    /** Textdatei (z. B. Marker) unter Download/MoCam/<Ordner> speichern; vor Android 10 im Filme-Ordner. */
+    fun saveTextToDownloads(ctx: Context, name: String, folder: String, text: String): Boolean = try {
+        val sub = if (folder.isBlank()) FOLDER else "$FOLDER/$folder"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + sub)
+            }
+            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            uri?.let { u -> ctx.contentResolver.openOutputStream(u)?.use { it.write(text.toByteArray()) } } != null
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), sub)
+            dir.mkdirs()
+            File(dir, name).writeText(text)
+            true
+        }
+    } catch (e: Exception) {
+        false
+    }
+
     /** #15 Autor und Copyright in die EXIF-Daten eines gespeicherten Fotos schreiben. */
     fun writeCopyright(ctx: Context, uri: Uri, author: String, copyright: String) {
         try {

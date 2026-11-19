@@ -127,6 +127,10 @@
                 <TextView android:id="@+id/btnLower" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimelapse" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
+                <TextView android:id="@+id/btnZebra" style="@style/TopChip" />
+                <TextView android:id="@+id/btnHisto" style="@style/TopChip" />
+                <TextView android:id="@+id/btnLevel" style="@style/TopChip" />
+                <TextView android:id="@+id/btnMarkers" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFps" style="@style/TopChip" />
                 <TextView android:id="@+id/btnBitrate" style="@style/TopChip" />
@@ -386,6 +390,19 @@
                 android:layout_gravity="center"
                 android:background="@drawable/shutter_photo"
                 android:contentDescription="Auslöser" />
+
+            <TextView
+                android:id="@+id/btnMarker"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="64dp"
+                android:background="@drawable/round_btn"
+                android:contentDescription="Marker setzen"
+                android:gravity="center"
+                android:text="🔖"
+                android:textSize="20sp"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/btnSwitch"

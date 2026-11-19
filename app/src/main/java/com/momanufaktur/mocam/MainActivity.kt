@@ -96,6 +96,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var shareBar: View
     private lateinit var shareButtons: LinearLayout
     private lateinit var btnGrid: TextView
+    private lateinit var btnZebra: TextView
+    private lateinit var btnHisto: TextView
+    private lateinit var btnLevel: TextView
+    private lateinit var btnMarkers: TextView
+    private lateinit var btnMarker: TextView
+    private val markerTimes = mutableListOf<Long>()
+    private var lastRecordedNs = 0L
     private lateinit var btnQuality: TextView
     private lateinit var btnAudio: TextView
     private lateinit var btnExtension: TextView
@@ -277,12 +284,16 @@ class MainActivity : AppCompatActivity() {
         prompterView.playing = false
         recording?.stop()
         voice.stop()
+        sensorManager.unregisterListener(levelListener)
+        overlay.removeCallbacks(histoTicker)
     }
 
     override fun onStart() {
         super.onStart()
         if (settings.voiceTrigger && recording == null) startVoice()
         statusTicker.run()
+        applyLevelSensor()
+        if (settings.histogram) histoTicker.run()
     }
 
     override fun onDestroy() {
@@ -339,6 +350,11 @@ class MainActivity : AppCompatActivity() {
         shareBar = findViewById(R.id.shareBar)
         shareButtons = findViewById(R.id.shareButtons)
         btnGrid = findViewById(R.id.btnGrid)
+        btnZebra = findViewById(R.id.btnZebra)
+        btnHisto = findViewById(R.id.btnHisto)
+        btnLevel = findViewById(R.id.btnLevel)
+        btnMarkers = findViewById(R.id.btnMarkers)
+        btnMarker = findViewById(R.id.btnMarker)
         btnQuality = findViewById(R.id.btnQuality)
         btnAudio = findViewById(R.id.btnAudio)
         btnExtension = findViewById(R.id.btnExtension)
@@ -394,6 +410,29 @@ class MainActivity : AppCompatActivity() {
 
         // Gesten auf der Vorschau
         overlay.onTap = { x, y -> focusAt(x, y) }
+        overlay.onLongPress = { x, y -> lockAt(x, y) }
+        fxState.zebra = settings.zebra
+        btnZebra.setOnClickListener {
+            settings.zebra = !settings.zebra
+            fxState.zebra = settings.zebra
+            updateUi()
+        }
+        btnHisto.setOnClickListener {
+            settings.histogram = !settings.histogram
+            if (settings.histogram) histoTicker.run() else overlay.histogram = null
+            updateUi()
+        }
+        btnLevel.setOnClickListener {
+            settings.level = !settings.level
+            applyLevelSensor()
+            updateUi()
+        }
+        btnMarkers.setOnClickListener {
+            settings.markers = !settings.markers
+            if (settings.markers) toast("Während der Aufnahme 🔖 tippen, um Stellen zu markieren")
+            updateUi()
+        }
+        btnMarker.setOnClickListener { addMarker() }
         overlay.onDoubleTap = { switchCamera() }
         overlay.onZoomScale = { factor ->
             camera?.let { cam ->
@@ -1154,6 +1193,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
+        if (overlay.lockText != null) {
+            // Sperre aufheben
+            overlay.lockText = null
+            cam.cameraControl.cancelFocusAndMetering()
+        }
         // PreviewView ist ggf. horizontal zurückgespiegelt -> Tippen entsprechend umrechnen
         val px = if (previewView.scaleX < 0f) previewView.width - x else x
         val point = previewView.meteringPointFactory.createPoint(px, y)
@@ -1395,6 +1439,8 @@ class MainActivity : AppCompatActivity() {
         MediaStoreUtil.subFolder = currentFolder()
         recordingFolder = MediaStoreUtil.subFolder
         voice.stop() // Mikrofon für die Aufnahme freigeben
+        markerTimes.clear()
+        lastRecordedNs = 0L
         if (settings.audio && settings.micMode == "bluetooth") startBluetoothMic()
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
@@ -1428,6 +1474,7 @@ class MainActivity : AppCompatActivity() {
                     updateUi()
                 }
                 is VideoRecordEvent.Status -> {
+                    lastRecordedNs = event.recordingStats.recordedDurationNanos
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
                     val limit = settings.timeLimit
                     recIndicator.text = if (limit > 0) {
@@ -1455,6 +1502,7 @@ class MainActivity : AppCompatActivity() {
                     prompterView.playing = false
                     if (!event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE) {
                         setLastMedia(event.outputResults.outputUri, true)
+                        saveMarkers(event.outputResults.outputUri)
                         if (!startPostProcessing(event.outputResults.outputUri)) toast("Video gespeichert")
                     } else {
                         Log.e(TAG, "Video-Fehler ${event.error}", event.cause)
@@ -2324,6 +2372,96 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // #4 AE/AF-Sperre, #6 Histogramm, #7 Wasserwaage, #8 Marker
+    // =====================================================================
+
+    private fun lockAt(x: Float, y: Float) {
+        val cam = camera ?: return
+        val px = if (previewView.scaleX < 0f) previewView.width - x else x
+        val point = previewView.meteringPointFactory.createPoint(px, y)
+        val action = FocusMeteringAction.Builder(
+            point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
+        ).disableAutoCancel().build()
+        cam.cameraControl.startFocusAndMetering(action)
+        overlay.showLock(x, y)
+        toast("AE/AF gesperrt – einmal tippen hebt die Sperre auf")
+    }
+
+    private val histoTicker = object : Runnable {
+        override fun run() {
+            if (!settings.histogram) return
+            val bmp = try { previewView.bitmap } catch (e: Exception) { null }
+            if (bmp != null) bg.execute {
+                val small = Bitmap.createScaledBitmap(bmp, 96, (96f * bmp.height / bmp.width).toInt().coerceAtLeast(1), false)
+                bmp.recycle()
+                val px = IntArray(small.width * small.height)
+                small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
+                small.recycle()
+                val bins = FloatArray(64)
+                for (c in px) {
+                    val lum = (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 256f
+                    bins[(lum * 64).toInt().coerceIn(0, 63)] += 1f
+                }
+                val max = bins.maxOrNull()?.takeIf { it > 0f } ?: 1f
+                for (i in bins.indices) bins[i] = bins[i] / max
+                runOnUiThread { if (settings.histogram) overlay.histogram = bins }
+            }
+            overlay.postDelayed(this, 400)
+        }
+    }
+
+    private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager }
+    private var smoothAngle = 0f
+    private val levelListener = object : android.hardware.SensorEventListener {
+        override fun onSensorChanged(e: android.hardware.SensorEvent) {
+            val a = Math.toDegrees(kotlin.math.atan2(-e.values[0].toDouble(), e.values[1].toDouble())).toFloat()
+            smoothAngle = smoothAngle * 0.8f + a * 0.2f
+            overlay.levelAngle = smoothAngle
+        }
+        override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+    }
+
+    private fun applyLevelSensor() {
+        sensorManager.unregisterListener(levelListener)
+        if (settings.level) {
+            val s = sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_GRAVITY)
+                ?: sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
+            if (s != null) sensorManager.registerListener(levelListener, s, android.hardware.SensorManager.SENSOR_DELAY_UI)
+        } else {
+            overlay.levelAngle = null
+        }
+    }
+
+    private fun addMarker() {
+        markerTimes += lastRecordedNs
+        val s = lastRecordedNs / 1_000_000_000.0
+        toast(String.format("🔖 Marker %d bei %d:%04.1f", markerTimes.size, (s / 60).toInt(), s % 60))
+    }
+
+    /** Marker als Textdatei neben das Video (Download/MoCam/<Ordner>, Name wie das Video). */
+    private fun saveMarkers(video: Uri) {
+        if (markerTimes.isEmpty()) return
+        val times = markerTimes.toList()
+        val folder = recordingFolder
+        bg.execute {
+            val name = try {
+                contentResolver.query(video, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            } catch (e: Exception) { null } ?: MediaStoreUtil.fileName("MoCam")
+            val text = buildString {
+                append("Marker für ").append(name).append('\n')
+                times.forEachIndexed { i, ns ->
+                    val s = ns / 1_000_000_000.0
+                    append(String.format(java.util.Locale.GERMANY, "%d. %02d:%04.1f%n", i + 1, (s / 60).toInt(), s % 60))
+                }
+            }
+            val ok = MediaStoreUtil.saveTextToDownloads(this, name.substringBeforeLast('.') + "_Marker.txt", folder, text)
+            runOnUiThread { if (ok) toast("${times.size} Marker gespeichert (Download/MoCam)") }
+        }
+    }
+
+    // =====================================================================
     // #16 Sprachauslöser, #17 Restaufnahmezeit / Akku
     // =====================================================================
 
@@ -2616,6 +2754,12 @@ class MainActivity : AppCompatActivity() {
         btnTimelapse.visibility = if (videoMode) View.VISIBLE else View.GONE
         audioLevel.visibility = if (rec && settings.audio && settings.timelapse == 0) View.VISIBLE else View.GONE
         btnGrid.text = if (settings.grid) "▦ Raster an" else "▦ Raster aus"
+        btnZebra.text = if (settings.zebra) "🦓 Zebra an" else "🦓 Zebra aus"
+        btnHisto.text = if (settings.histogram) "📊 Histogramm an" else "📊 Histogramm aus"
+        btnLevel.text = if (settings.level) "📐 Wasserwaage an" else "📐 Wasserwaage aus"
+        btnMarkers.text = if (settings.markers) "🔖 Marker an" else "🔖 Marker aus"
+        btnMarkers.visibility = if (videoMode) View.VISIBLE else View.GONE
+        btnMarker.visibility = if (rec && settings.markers) View.VISIBLE else View.GONE
         btnQuality.text = "🎞 " + qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].second
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
         btnExtension.text = "✨ " + extensionName(extensionMode)

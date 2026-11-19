@@ -270,6 +270,23 @@ class Settings(ctx: Context) {
         get() = bool("voiceTrigger", false)
         set(v) = p.edit().putBoolean("voiceTrigger", v).apply()
 
+    /** #5–#8 Anzeigen */
+    var zebra: Boolean
+        get() = bool("zebra", false)
+        set(v) = p.edit().putBoolean("zebra", v).apply()
+
+    var histogram: Boolean
+        get() = bool("histogram", false)
+        set(v) = p.edit().putBoolean("histogram", v).apply()
+
+    var level: Boolean
+        get() = bool("level", false)
+        set(v) = p.edit().putBoolean("level", v).apply()
+
+    var markers: Boolean
+        get() = bool("markers", false)
+        set(v) = p.edit().putBoolean("markers", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

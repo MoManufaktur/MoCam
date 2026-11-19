@@ -56,6 +56,8 @@ class FxState {
     @Volatile var lowerStartMs = 0L
     @Volatile var lowerDurationMs = 5000L
     @Volatile var lowerX = 0.04f
+    /** #5 Zebra-Streifen (nur Vorschau). */
+    @Volatile var zebra = false
     @Volatile var lowerY = 0.86f
     @Volatile var lowerW = 0.80f
     /** #5 Zeitraffer: nur jedes n-te Bild ins Video, Zeitstempel zusammengeschoben. */
@@ -103,6 +105,7 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
     private var uLower = 0
     private var uLowerRect = 0
     private var uLowerAlpha = 0
+    private var uZebra = 0
 
     // ---- EGL / GL ----
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -383,6 +386,7 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         // #6 Bauchbinde (nur Video, nur in den ersten Sekunden der Aufnahme)
         val la = if (burnLogo && hasLower) LowerThird.alphaNow(state.lowerStartMs, state.lowerDurationMs) else 0f
         GLES20.glUniform1f(uLowerAlpha, la)
+        GLES20.glUniform1f(uZebra, if (!burnLogo && state.zebra) 1f else 0f)
         if (la > 0f) {
             val upright = out.size.width.toFloat() / out.size.height.toFloat()
             val w = state.lowerW
@@ -501,6 +505,7 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         uLower = GLES20.glGetUniformLocation(program, "uLower")
         uLowerRect = GLES20.glGetUniformLocation(program, "uLowerRect")
         uLowerAlpha = GLES20.glGetUniformLocation(program, "uLowerAlpha")
+        uZebra = GLES20.glGetUniformLocation(program, "uZebra")
         glReady = program != 0
     }
 
@@ -611,6 +616,7 @@ uniform float uWantMirror;
 uniform sampler2D uLower;
 uniform vec4 uLowerRect;
 uniform float uLowerAlpha;
+uniform float uZebra;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
@@ -661,6 +667,11 @@ void main() {
 
     vec3 c = texture2D(uCam, tc).rgb;
     c = clamp(uColor * c + uOff, 0.0, 1.0);
+    // #5 Zebra: überbelichtete Stellen schraffieren (nur Anzeige)
+    if (uZebra > 0.5) {
+        float lum = dot(c, vec3(0.299, 0.587, 0.114));
+        if (lum > 0.95 && mod(gl_FragCoord.x + gl_FragCoord.y, 16.0) < 8.0) c = vec3(0.1);
+    }
     if (uHasLogo > 0.5) {
         vec2 luv = (d - uRect.xy) / uRect.zw;
         if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
