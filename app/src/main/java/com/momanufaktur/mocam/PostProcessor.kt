@@ -36,7 +36,10 @@ class PostProcessor(private val ctx: Context) {
         val folder: String,
         val subtitles: Boolean,
         val intro: File?,
-        val outro: File?
+        val outro: File?,
+        /** "burn" = einbrennen, "srt" = .srt-Datei, "both" = beides */
+        val subMode: String = "burn",
+        val subStyle: SubtitleStyle = SubtitleStyle()
     )
 
     /** Status-Meldungen für die Anzeige (läuft auf dem Hauptthread). */
@@ -81,8 +84,19 @@ class PostProcessor(private val ctx: Context) {
     }
 
     private fun export(job: Job, captions: List<Caption>) {
-        if (captions.isEmpty() && job.intro == null && job.outro == null) {
-            if (job.subtitles) main.post { onDone?.invoke(null, "Keine Sprache erkannt – Video bleibt unverändert") }
+        val burn = captions.isNotEmpty() && job.subMode != "srt"
+        val srt = captions.isNotEmpty() && job.subMode != "burn"
+        if (job.subtitles && captions.isEmpty()) {
+            main.post { onDone?.invoke(null, "Keine Sprache erkannt – keine Untertitel") }
+        }
+        if (!burn && job.intro == null && job.outro == null) {
+            // Nichts am Video zu ändern – ggf. nur die .srt-Datei neben das Original legen
+            if (srt) bg.execute {
+                val ok = try { saveSrt(displayName(job.input), job.folder, toSrt(captions)) } catch (t: Throwable) {
+                    Log.e(TAG, "SRT", t); false
+                }
+                main.post { onDone?.invoke(null, if (ok) "Untertitel als .srt gespeichert (Download/MoCam)" else "SRT konnte nicht gespeichert werden") }
+            }
             next()
             return
         }
@@ -97,7 +111,7 @@ class PostProcessor(private val ctx: Context) {
             .setEffects(Effects(emptyList(), listOf(fit))).build() }
 
         val mainEffects = mutableListOf<androidx.media3.common.Effect>(fit)
-        if (captions.isNotEmpty()) mainEffects += OverlayEffect(listOf(CaptionOverlay(captions)))
+        if (burn) mainEffects += OverlayEffect(listOf(CaptionOverlay(captions, job.subStyle)))
         items += EditedMediaItem.Builder(MediaItem.fromUri(job.input))
             .setEffects(Effects(emptyList(), mainEffects)).build()
 
@@ -116,6 +130,12 @@ class PostProcessor(private val ctx: Context) {
                     bg.execute {
                         val uri = try { saveToGallery(outFile, job) } catch (t: Throwable) {
                             Log.e(TAG, "Speichern", t); null
+                        }
+                        if (uri != null && srt) {
+                            val offset = job.intro?.let { durationSec(Uri.fromFile(it)) } ?: 0.0
+                            try { saveSrt(displayName(uri), job.folder, toSrt(captions, offset)) } catch (t: Throwable) {
+                                Log.e(TAG, "SRT", t)
+                            }
                         }
                         outFile.delete()
                         if (uri != null) {
@@ -160,6 +180,44 @@ class PostProcessor(private val ctx: Context) {
     private fun stopProgress() {
         progressRunnable?.let { main.removeCallbacks(it) }
         progressRunnable = null
+    }
+
+    private fun durationSec(uri: Uri): Double {
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(ctx, uri)
+            (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000.0
+        } catch (e: Exception) { 0.0 } finally { r.release() }
+    }
+
+    private fun displayName(uri: Uri): String {
+        return try {
+            ctx.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            } ?: MediaStoreUtil.fileName("MoCam")
+        } catch (e: Exception) { MediaStoreUtil.fileName("MoCam") }
+    }
+
+    /** .srt neben das Video: ab Android 10 unter Download/MoCam/<Ordner>, davor im Filme-Ordner. */
+    private fun saveSrt(videoName: String, folder: String, content: String): Boolean {
+        val name = videoName.substringBeforeLast('.') + ".srt"
+        val sub = if (folder.isBlank()) MediaStoreUtil.FOLDER else MediaStoreUtil.FOLDER + "/" + folder
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/x-subrip")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/" + sub)
+            }
+            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+            ctx.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+            return true
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES), sub)
+            dir.mkdirs()
+            File(dir, name).writeText(content, Charsets.UTF_8)
+            return true
+        }
     }
 
     private fun videoSize(uri: Uri): Pair<Int, Int> {

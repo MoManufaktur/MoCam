@@ -55,6 +55,9 @@ class FxState {
     /** #6 Bauchbinde: Startzeit (uptimeMillis, 0 = aus) und Dauer. */
     @Volatile var lowerStartMs = 0L
     @Volatile var lowerDurationMs = 5000L
+    @Volatile var lowerX = 0.04f
+    @Volatile var lowerY = 0.86f
+    @Volatile var lowerW = 0.80f
     /** #5 Zeitraffer: nur jedes n-te Bild ins Video, Zeitstempel zusammengeschoben. */
     @Volatile var timelapseFactor = 0
     @Volatile var timelapseActive = false
@@ -382,11 +385,9 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         GLES20.glUniform1f(uLowerAlpha, la)
         if (la > 0f) {
             val upright = out.size.width.toFloat() / out.size.height.toFloat()
-            val bw = LowerThird.MAX_WIDTH.coerceAtMost(0.80f)
-            // Breite so, dass die Schrift nicht zu groß wird: an Bildbreite orientiert
-            val w = bw * (if (upright < 1f) 1f else 0.6f)
+            val w = state.lowerW
             val h = w * lowerAspect * upright
-            GLES20.glUniform4f(uLowerRect, LowerThird.LEFT, LowerThird.BOTTOM - h, w, h)
+            GLES20.glUniform4f(uLowerRect, state.lowerX, state.lowerY - h, w, h)
         }
 
         GLES20.glEnableVertexAttribArray(aPos)

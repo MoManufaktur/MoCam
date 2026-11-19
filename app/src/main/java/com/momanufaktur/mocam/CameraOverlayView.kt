@@ -50,6 +50,15 @@ class CameraOverlayView @JvmOverloads constructor(
     var lowerStartMs = 0L
         set(v) { field = v; invalidate() }
     var lowerDurationMs = 5000L
+    var lowerStyle = LowerThirdStyle()
+    /** Bauchbinde dauerhaft zeigen (während sie eingestellt wird). */
+    var lowerPinned = false
+        set(v) { field = v; invalidate() }
+    /** #9 Untertitel-Vorschau (während sie eingestellt werden). */
+    var subPreviewText: String? = null
+        set(v) { field = v; invalidate() }
+    var subStyle = SubtitleStyle()
+        set(v) { field = v; invalidate() }
 
     /** Logo in der Vorschau anzeigen (Logo an). */
     var showLogo = false
@@ -156,17 +165,21 @@ class CameraOverlayView @JvmOverloads constructor(
             }
         }
         lowerBitmap?.let { lb ->
-            val a = LowerThird.alphaNow(lowerStartMs, lowerDurationMs)
+            val a = if (lowerPinned) 1f else LowerThird.alphaNow(lowerStartMs, lowerDurationMs)
             if (a > 0f) {
                 val cr = contentRect(tmpRect)
-                val w = LowerThird.MAX_WIDTH * cr.width()
+                val w = lowerStyle.width * cr.width()
                 val h = w * lb.height / lb.width
-                val left = cr.left + LowerThird.LEFT * cr.width()
-                val bottom = cr.top + LowerThird.BOTTOM * cr.height()
+                val left = cr.left + lowerStyle.x * cr.width()
+                val bottom = cr.top + lowerStyle.y * cr.height()
                 lowerPaint.alpha = (a * 255).toInt()
                 canvas.drawBitmap(lb, null, RectF(left, bottom - h, left + w, bottom), lowerPaint)
-                postInvalidateOnAnimation()
+                if (!lowerPinned) postInvalidateOnAnimation()
             }
+        }
+        subPreviewText?.let { t ->
+            val cr = contentRect(tmpRect)
+            drawCaption(canvas, t, cr.left, cr.top, cr.width(), cr.height(), subStyle)
         }
         if (editLogo && !hasLogo) {
             canvas.drawText("Bitte zuerst ein Logo wählen", width / 2f, height / 3f, textPaint)

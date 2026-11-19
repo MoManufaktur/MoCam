@@ -8,46 +8,110 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.SystemClock
 import kotlin.math.max
+import kotlin.math.roundToInt
+
+/** Gestaltung der Bauchbinde. Größen/Positionen relativ zur Bildbreite bzw. -höhe. */
+data class LowerThirdStyle(
+    /** linker Rand (Anteil der Bildbreite) */
+    val x: Float = 0.04f,
+    /** Unterkante (Anteil der Bildhöhe) */
+    val y: Float = 0.86f,
+    /** Breite des Balkens (Anteil der Bildbreite) */
+    val width: Float = 0.80f,
+    /** Schriftgrößen (Anteil der Bildbreite) */
+    val nameSize: Float = 0.065f,
+    val titleSize: Float = 0.042f,
+    val font: Int = 0,
+    val bgColor: Int = Color.rgb(17, 17, 17),
+    val bgAlpha: Float = 0.82f,
+    val accentColor: Int = Color.rgb(255, 213, 79),
+    val nameColor: Int = Color.WHITE,
+    val titleColor: Int = Color.rgb(255, 213, 79)
+)
 
 /**
- * #6 Bauchbinde: Name und Funktion als Balken unten links, wird am Videoanfang
- * für einige Sekunden eingeblendet (im Video eingebrannt, in der Vorschau als Ebene).
+ * #6 Bauchbinde: Name und Funktion als Balken, am Videoanfang für einige Sekunden eingeblendet
+ * (im Video eingebrannt, in der Vorschau als Ebene).
  */
 object LowerThird {
 
-    /** Lage im Bild (relativ): linker Rand, Unterkante und Breite. */
-    const val LEFT = 0.04f
-    const val BOTTOM = 0.86f
-    const val MAX_WIDTH = 0.80f
-
     private const val FADE_MS = 400f
+    /** Referenzbreite: Bitmap-Pixel pro voller Bildbreite. */
+    private const val REF = 1000f
 
-    fun render(name: String, title: String, accent: Int = Color.rgb(255, 213, 79)): Bitmap? {
+    /** Wählbare Schriftarten (Name, Schrift). */
+    val FONTS: List<Pair<String, Typeface>> = listOf(
+        "Standard" to Typeface.create("sans-serif", Typeface.NORMAL),
+        "Schmal" to Typeface.create("sans-serif-condensed", Typeface.NORMAL),
+        "Leicht" to Typeface.create("sans-serif-light", Typeface.NORMAL),
+        "Kräftig" to Typeface.create("sans-serif-black", Typeface.NORMAL),
+        "Serif" to Typeface.SERIF,
+        "Mono" to Typeface.MONOSPACE,
+        "Locker" to Typeface.create("casual", Typeface.NORMAL),
+        "Schreibschrift" to Typeface.create("cursive", Typeface.NORMAL)
+    )
+
+    /** Farbpalette für Hintergrund, Zierstreifen und Schrift. */
+    val COLORS: List<Pair<String, Int>> = listOf(
+        "Schwarz" to Color.rgb(17, 17, 17),
+        "Anthrazit" to Color.rgb(55, 61, 66),
+        "Weiß" to Color.WHITE,
+        "Gelb" to Color.rgb(255, 213, 79),
+        "Orange" to Color.rgb(251, 140, 0),
+        "Rot" to Color.rgb(229, 57, 53),
+        "Grün" to Color.rgb(67, 160, 71),
+        "Petrol" to Color.rgb(0, 137, 123),
+        "Blau" to Color.rgb(30, 136, 229),
+        "Lila" to Color.rgb(142, 36, 170)
+    )
+
+    fun render(name: String, title: String, st: LowerThirdStyle): Bitmap? {
         if (name.isBlank() && title.isBlank()) return null
+        val base = FONTS.getOrElse(st.font) { FONTS[0] }.second
         val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 96f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            color = st.nameColor
+            textSize = st.nameSize * REF
+            typeface = Typeface.create(base, Typeface.BOLD)
         }
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = accent
-            textSize = 62f
+            color = st.titleColor
+            textSize = st.titleSize * REF
+            typeface = base
         }
-        val textW = max(namePaint.measureText(name), titlePaint.measureText(title))
-        val w = max(600, (textW + 110).toInt())
-        val h = if (title.isBlank() || name.isBlank()) 190 else 290
+        val w = max(120, (st.width * REF).roundToInt())
+        val stripe = REF * 0.012f
+        val padX = stripe + REF * 0.03f
+        val padY = REF * 0.022f
+        // Schrift verkleinern, falls der Text nicht in den Balken passt
+        val avail = w - padX - REF * 0.03f
+        fun fit(p: Paint, t: String) {
+            if (t.isBlank()) return
+            val tw = p.measureText(t)
+            if (tw > avail) p.textSize *= avail / tw
+        }
+        fit(namePaint, name)
+        fit(titlePaint, title)
+
+        val nameH = if (name.isBlank()) 0f else namePaint.textSize * 1.15f
+        val titleH = if (title.isBlank()) 0f else titlePaint.textSize * 1.25f
+        val h = max(40, (padY * 2 + nameH + titleH).roundToInt())
+
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        c.drawRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), 26f, 26f,
-            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(210, 17, 17, 17) })
-        c.drawRect(0f, 0f, 18f, h.toFloat(), Paint().apply { color = accent })
-        if (name.isNotBlank() && title.isNotBlank()) {
-            c.drawText(name, 60f, 125f, namePaint)
-            c.drawText(title, 60f, 230f, titlePaint)
-        } else if (name.isNotBlank()) {
-            c.drawText(name, 60f, 128f, namePaint)
-        } else {
-            c.drawText(title, 60f, 118f, titlePaint)
+        val bg = Color.argb((st.bgAlpha * 255).roundToInt().coerceIn(0, 255),
+            Color.red(st.bgColor), Color.green(st.bgColor), Color.blue(st.bgColor))
+        c.drawRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), REF * 0.02f, REF * 0.02f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bg })
+        c.drawRect(0f, 0f, stripe, h.toFloat(), Paint().apply { color = st.accentColor })
+        var yy = padY
+        if (name.isNotBlank()) {
+            yy += namePaint.textSize
+            c.drawText(name, padX, yy, namePaint)
+            yy += namePaint.textSize * 0.15f
+        }
+        if (title.isNotBlank()) {
+            yy += titlePaint.textSize * 1.05f
+            c.drawText(title, padX, yy, titlePaint)
         }
         return bmp
     }

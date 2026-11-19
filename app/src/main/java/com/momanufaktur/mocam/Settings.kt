@@ -200,6 +200,39 @@ class Settings(ctx: Context) {
         get() = bool("subtitles", false)
         set(v) = p.edit().putBoolean("subtitles", v).apply()
 
+    /** #6 Gestaltung der Bauchbinde */
+    var lowerStyle: LowerThirdStyle
+        get() {
+            val d = LowerThirdStyle()
+            return LowerThirdStyle(
+                x = float("lt_x", d.x), y = float("lt_y", d.y), width = float("lt_w", d.width),
+                nameSize = float("lt_ns", d.nameSize), titleSize = float("lt_ts", d.titleSize),
+                font = int("lt_font", d.font),
+                bgColor = int("lt_bg", d.bgColor), bgAlpha = float("lt_bga", d.bgAlpha),
+                accentColor = int("lt_acc", d.accentColor),
+                nameColor = int("lt_nc", d.nameColor), titleColor = int("lt_tc", d.titleColor)
+            )
+        }
+        set(v) = p.edit()
+            .putFloat("lt_x", v.x).putFloat("lt_y", v.y).putFloat("lt_w", v.width)
+            .putFloat("lt_ns", v.nameSize).putFloat("lt_ts", v.titleSize).putInt("lt_font", v.font)
+            .putInt("lt_bg", v.bgColor).putFloat("lt_bga", v.bgAlpha).putInt("lt_acc", v.accentColor)
+            .putInt("lt_nc", v.nameColor).putInt("lt_tc", v.titleColor)
+            .apply()
+
+    /** #9 Gestaltung der Untertitel */
+    var subtitleStyle: SubtitleStyle
+        get() {
+            val d = SubtitleStyle()
+            return SubtitleStyle(float("sub_y", d.posY), float("sub_size", d.size), float("sub_bga", d.bgAlpha))
+        }
+        set(v) = p.edit().putFloat("sub_y", v.posY).putFloat("sub_size", v.size).putFloat("sub_bga", v.bgAlpha).apply()
+
+    /** #9 "burn" = einbrennen, "srt" = .srt-Datei, "both" = beides */
+    var subtitleMode: String
+        get() = p.getString("sub_mode", "burn") ?: "burn"
+        set(v) = p.edit().putString("sub_mode", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

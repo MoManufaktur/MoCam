@@ -99,6 +99,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSettings: TextView
     private lateinit var settingsPanel: View
     private lateinit var settingsContent: LinearLayout
+    private lateinit var editorPanel: View
+    private lateinit var editorContent: LinearLayout
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -292,6 +294,8 @@ class MainActivity : AppCompatActivity() {
         btnSettings = findViewById(R.id.btnSettings)
         settingsPanel = findViewById(R.id.settingsPanel)
         settingsContent = findViewById(R.id.settingsContent)
+        editorPanel = findViewById(R.id.editorPanel)
+        editorContent = findViewById(R.id.editorContent)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -420,7 +424,13 @@ class MainActivity : AppCompatActivity() {
             updateUi()
         }
         btnSettings.setOnClickListener {
-            if (settingsPanel.visibility == View.VISIBLE) closeSettings() else openSettings()
+            if (settingsPanel.visibility == View.VISIBLE) closeSettings()
+        if (editorPanel.visibility == View.VISIBLE) {
+            editorPanel.visibility = View.GONE
+            overlay.lowerPinned = false
+            overlay.subPreviewText = null
+            bottomPanel.visibility = View.VISIBLE
+        } else openSettings()
         }
         btnFormat.setOnClickListener {
             if (recording != null) return@setOnClickListener
@@ -884,33 +894,8 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- #6 Bauchbinde ----------
         settingsContent.addView(text("🪪 Bauchbinde (Video)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        fun field(hintText: String, value: String, onChange: (String) -> Unit) = EditText(this).apply {
-            setText(value)
-            hint = hintText
-            setSingleLine()
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
-                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
-                override fun afterTextChanged(e: android.text.Editable?) {
-                    onChange(e?.toString() ?: "")
-                    applyLowerThird()
-                }
-            })
-        }
-        settingsContent.addView(field("Name", settings.lowerName) { settings.lowerName = it })
-        settingsContent.addView(field("Funktion / Firma", settings.lowerTitle) { settings.lowerTitle = it })
-        val lowerRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
-        lowerRow.addView(chip("Dauer: ${settings.lowerSeconds} s") {}.also { d ->
-            d.setOnClickListener {
-                settings.lowerSeconds = when (settings.lowerSeconds) { 3 -> 5; 5 -> 8; 8 -> 10; else -> 3 }
-                d.text = "Dauer: ${settings.lowerSeconds} s"
-                applyLowerThird()
-            }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-        lowerRow.addView(chip("👁 Vorschau") { previewLowerThird() })
-        settingsContent.addView(lowerRow)
+        settingsContent.addView(chip("🪪 Bauchbinde gestalten …") { openLowerThirdEditor() },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
 
         // ---------- #8 Mikrofon ----------
         settingsContent.addView(text("🎤 Mikrofon", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
@@ -949,22 +934,12 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- #9 Untertitel ----------
         settingsContent.addView(text("💬 Untertitel (Deutsch, offline)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(SwitchCompat(this).apply {
-            text = "Automatisch erkennen und einbrennen"
-            setTextColor(Color.WHITE)
-            isChecked = settings.subtitlesEnabled
-            setOnCheckedChangeListener { _, c ->
-                settings.subtitlesEnabled = c
-                if (c && !Subtitles.isModelReady(this@MainActivity)) toast("Bitte zuerst das Sprachmodell laden")
-            }
-        })
-        val modelText = text(if (Subtitles.isModelReady(this)) "Sprachmodell: bereit ✓" else "Sprachmodell: noch nicht geladen (ca. 45 MB, einmalig)",
-            12f, Color.argb(200, 255, 255, 255))
-        settingsContent.addView(modelText)
-        if (!Subtitles.isModelReady(this)) {
-            settingsContent.addView(chip("⬇ Sprachmodell laden") { downloadModel(modelText) },
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
-        }
+        settingsContent.addView(text(
+            (if (settings.subtitlesEnabled) "An" else "Aus") + " · " + subModeName(settings.subtitleMode) +
+                (if (Subtitles.isModelReady(this)) "" else " · Sprachmodell fehlt"),
+            12f, Color.argb(200, 255, 255, 255)))
+        settingsContent.addView(chip("💬 Untertitel einstellen …") { openSubtitleEditor() },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1745,6 +1720,232 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // Eigene Einstellmenüs mit Live-Vorschau (Bauchbinde, Untertitel)
+    // =====================================================================
+
+    private fun openEditor(title: String, build: () -> Unit) {
+        settingsPanel.visibility = View.GONE
+        bottomPanel.visibility = View.GONE
+        editorContent.removeAllViews()
+        editorContent.addView(uiText(title, 17f, getColor(R.color.accent), true))
+        build()
+        editorPanel.visibility = View.VISIBLE
+    }
+
+    private fun closeEditor() {
+        editorPanel.visibility = View.GONE
+        overlay.lowerPinned = false
+        overlay.subPreviewText = null
+        openSettings()
+    }
+
+    private fun uiText(t: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false) =
+        TextView(this).apply {
+            text = t
+            textSize = size
+            setTextColor(color)
+            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+
+    private fun uiChip(t: String, selected: Boolean = false, onClick: () -> Unit) = TextView(this).apply {
+        text = t
+        textSize = 13f
+        setTextColor(if (selected) Color.BLACK else Color.WHITE)
+        setBackgroundResource(if (selected) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+        setPadding(dp(12), dp(7), dp(12), dp(7))
+        setOnClickListener { onClick() }
+    }
+
+    private fun wrapLp(end: Int = 6) = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { marginEnd = dp(end); topMargin = dp(4) }
+
+    private fun uiSection(t: String) {
+        editorContent.addView(uiText(t, 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(14), 0, dp(2)) })
+    }
+
+    /** Schieberegler von min bis max; zeigt den Wert in Prozent. */
+    private fun uiSlider(label: String, min: Float, max: Float, value: Float, onChange: (Float) -> Unit) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val lbl = uiText("", 13f)
+        fun show(v: Float) { lbl.text = "$label: ${(v * 100).roundToInt()} %" }
+        show(value)
+        row.addView(lbl, LinearLayout.LayoutParams(dp(150), LinearLayout.LayoutParams.WRAP_CONTENT))
+        val sb = SeekBar(this).apply {
+            this.max = 1000
+            progress = (((value - min) / (max - min)) * 1000).roundToInt().coerceIn(0, 1000)
+            setOnSeekBarChangeListener(object : SimpleSeek() {
+                override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val v = min + (max - min) * p / 1000f
+                    show(v)
+                    onChange(v)
+                }
+            })
+        }
+        row.addView(sb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        editorContent.addView(row)
+    }
+
+    /** Horizontale Auswahl-Leiste (Schriftarten, Farben, Modi). */
+    private fun uiChoice(items: List<String>, selected: Int, colors: List<Int>? = null, onPick: (Int) -> Unit) {
+        val hs = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val views = mutableListOf<TextView>()
+        items.forEachIndexed { i, name ->
+            val tv = uiChip(name, i == selected) {}
+            if (colors != null) {
+                // Farbfeld vor dem Namen
+                val sw = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(colors[i]); setStroke(dp(1), Color.GRAY); setSize(dp(14), dp(14))
+                }
+                tv.setCompoundDrawablesWithIntrinsicBounds(sw, null, null, null)
+                tv.compoundDrawablePadding = dp(6)
+            }
+            tv.setOnClickListener {
+                views.forEachIndexed { j, v ->
+                    v.setBackgroundResource(if (j == i) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+                    v.setTextColor(if (j == i) Color.BLACK else Color.WHITE)
+                }
+                onPick(i)
+            }
+            views += tv
+            row.addView(tv, wrapLp())
+        }
+        hs.addView(row)
+        editorContent.addView(hs)
+    }
+
+    private fun uiField(hintText: String, value: String, onChange: (String) -> Unit) {
+        editorContent.addView(EditText(this).apply {
+            setText(value)
+            hint = hintText
+            setSingleLine()
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun afterTextChanged(e: android.text.Editable?) { onChange(e?.toString() ?: "") }
+            })
+        })
+    }
+
+    private fun uiButtons(onReset: () -> Unit) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, 0) }
+        row.addView(uiChip("Zurücksetzen") { onReset() }, wrapLp(8))
+        row.addView(uiChip("✓ Fertig") { closeEditor() }, wrapLp(0))
+        editorContent.addView(row)
+    }
+
+    // ---------------- #6 Bauchbinde gestalten ----------------
+
+    private fun openLowerThirdEditor() {
+        if (!videoMode) setVideoMode(true)
+        applyLowerThird()
+        overlay.lowerPinned = true
+        fun update(change: (LowerThirdStyle) -> LowerThirdStyle) {
+            settings.lowerStyle = change(settings.lowerStyle)
+            applyLowerThird()
+        }
+        openEditor("🪪 Bauchbinde gestalten") {
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "Bauchbinde bei Videos einblenden"
+                setTextColor(Color.WHITE)
+                isChecked = settings.lowerEnabled
+                setOnCheckedChangeListener { _, c -> settings.lowerEnabled = c; updateUi() }
+            })
+            uiSection("Text")
+            uiField("Name", settings.lowerName) { settings.lowerName = it; applyLowerThird() }
+            uiField("Funktion / Firma", settings.lowerTitle) { settings.lowerTitle = it; applyLowerThird() }
+
+            val st = settings.lowerStyle
+            uiSection("Größe & Position")
+            uiSlider("Breite", 0.30f, 0.95f, st.width) { v -> update { it.copy(width = v) } }
+            uiSlider("Abstand links", 0f, 0.60f, st.x) { v -> update { it.copy(x = v) } }
+            uiSlider("Höhe im Bild", 0.20f, 0.98f, st.y) { v -> update { it.copy(y = v) } }
+
+            uiSection("Schrift")
+            uiSlider("Größe Name", 0.03f, 0.12f, st.nameSize) { v -> update { it.copy(nameSize = v) } }
+            uiSlider("Größe Funktion", 0.02f, 0.08f, st.titleSize) { v -> update { it.copy(titleSize = v) } }
+            uiChoice(LowerThird.FONTS.map { it.first }, st.font) { i -> update { it.copy(font = i) } }
+
+            val names = LowerThird.COLORS.map { it.first }
+            val cols = LowerThird.COLORS.map { it.second }
+            fun idx(c: Int) = cols.indexOf(c).coerceAtLeast(-1)
+            uiSection("Hintergrundfarbe")
+            uiChoice(names, idx(st.bgColor), cols) { i -> update { it.copy(bgColor = cols[i]) } }
+            uiSlider("Deckkraft", 0f, 1f, st.bgAlpha) { v -> update { it.copy(bgAlpha = v) } }
+            uiSection("Zierstreifen")
+            uiChoice(names, idx(st.accentColor), cols) { i -> update { it.copy(accentColor = cols[i]) } }
+            uiSection("Schriftfarbe Name")
+            uiChoice(names, idx(st.nameColor), cols) { i -> update { it.copy(nameColor = cols[i]) } }
+            uiSection("Schriftfarbe Funktion")
+            uiChoice(names, idx(st.titleColor), cols) { i -> update { it.copy(titleColor = cols[i]) } }
+
+            uiSection("Dauer am Videoanfang")
+            val durs = listOf(3, 5, 8, 10, 15)
+            uiChoice(durs.map { "$it s" }, durs.indexOf(settings.lowerSeconds)) { i ->
+                settings.lowerSeconds = durs[i]; applyLowerThird()
+            }
+            uiButtons {
+                settings.lowerStyle = LowerThirdStyle()
+                applyLowerThird()
+                openLowerThirdEditor()
+            }
+        }
+    }
+
+    // ---------------- #9 Untertitel einstellen ----------------
+
+    private fun subModeName(m: String) = when (m) { "srt" -> "nur .srt-Datei"; "both" -> "eingebrannt + .srt"; else -> "eingebrannt" }
+
+    private fun openSubtitleEditor() {
+        overlay.subStyle = settings.subtitleStyle
+        overlay.subPreviewText = "So sehen deine Untertitel im Video aus"
+        fun update(change: (SubtitleStyle) -> SubtitleStyle) {
+            settings.subtitleStyle = change(settings.subtitleStyle)
+            overlay.subStyle = settings.subtitleStyle
+        }
+        openEditor("💬 Untertitel einstellen") {
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "Untertitel automatisch erkennen"
+                setTextColor(Color.WHITE)
+                isChecked = settings.subtitlesEnabled
+                setOnCheckedChangeListener { _, c ->
+                    settings.subtitlesEnabled = c
+                    if (c && !Subtitles.isModelReady(this@MainActivity)) toast("Bitte zuerst das Sprachmodell laden")
+                }
+            })
+            uiSection("Speichern als")
+            val modes = listOf("burn", "srt", "both")
+            uiChoice(listOf("Eingebrannt", ".srt-Datei", "Beides"), modes.indexOf(settings.subtitleMode)) { i ->
+                settings.subtitleMode = modes[i]
+            }
+            editorContent.addView(uiText(".srt-Dateien landen in „Download/MoCam/<Ordner>“ mit gleichem Namen wie das Video.",
+                11f, Color.argb(170, 255, 255, 255)))
+
+            val st = settings.subtitleStyle
+            uiSection("Position & Größe (eingebrannt)")
+            uiSlider("Höhe im Bild", 0.10f, 0.95f, st.posY) { v -> update { it.copy(posY = v) } }
+            uiSlider("Schriftgröße", 0.03f, 0.10f, st.size) { v -> update { it.copy(size = v) } }
+            uiSlider("Hintergrund", 0f, 1f, st.bgAlpha) { v -> update { it.copy(bgAlpha = v) } }
+
+            uiSection("Sprachmodell")
+            val modelText = uiText(if (Subtitles.isModelReady(this)) "Bereit ✓ (Deutsch, offline)" else "Noch nicht geladen (ca. 45 MB, einmalig)",
+                12f, Color.argb(200, 255, 255, 255))
+            editorContent.addView(modelText)
+            if (!Subtitles.isModelReady(this)) editorContent.addView(uiChip("⬇ Sprachmodell laden") { downloadModel(modelText) }, wrapLp())
+
+            uiButtons {
+                settings.subtitleStyle = SubtitleStyle()
+                openSubtitleEditor()
+            }
+        }
+    }
+
+    // =====================================================================
     // #9 / #10 Nachbearbeitung
     // =====================================================================
 
@@ -1770,7 +1971,8 @@ class MainActivity : AppCompatActivity() {
         val intro = if (settings.introOutroEnabled) introFile().takeIf { it.exists() } else null
         val outro = if (settings.introOutroEnabled) outroFile().takeIf { it.exists() } else null
         if (!subs && intro == null && outro == null) return false
-        post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro))
+        post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro,
+            settings.subtitleMode, settings.subtitleStyle))
         toast("Video gespeichert – wird jetzt bearbeitet")
         return true
     }
@@ -1797,7 +1999,12 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun applyLowerThird() {
-        val bmp = LowerThird.render(settings.lowerName, settings.lowerTitle)
+        val st = settings.lowerStyle
+        fxState.lowerX = st.x
+        fxState.lowerY = st.y
+        fxState.lowerW = st.width
+        overlay.lowerStyle = st
+        val bmp = LowerThird.render(settings.lowerName, settings.lowerTitle, st)
         videoProcessor.setLowerThird(bmp)
         overlay.lowerBitmap = bmp
         val dur = settings.lowerSeconds * 1000L

@@ -576,4 +576,20 @@
             android:orientation="vertical"
             android:padding="16dp" />
     </ScrollView>
+    <!-- Eigene Einstellmenüs (Bauchbinde, Untertitel) mit Live-Vorschau -->
+    <ScrollView
+        android:id="@+id/editorPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#EE111111"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/editorContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp" />
+    </ScrollView>
 </FrameLayout>

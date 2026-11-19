@@ -133,11 +133,58 @@ object Subtitles {
     }
 }
 
+/** Gestaltung der Untertitel: Position (Mitte, Anteil der Bildhöhe) und Schriftgröße (Anteil der Bildbreite). */
+data class SubtitleStyle(val posY: Float = 0.80f, val size: Float = 0.058f, val bgAlpha: Float = 0.6f)
+
+/** Zeichnet einen Untertitel in ein Rechteck (Bild bzw. Vorschau-Ausschnitt). Für Video und Vorschau gleich. */
+fun drawCaption(c: Canvas, text: String, left: Float, top: Float, width: Float, height: Float, st: SubtitleStyle) {
+    if (text.isBlank()) return
+    val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = width * st.size
+        isFakeBoldText = true
+    }
+    val maxW = (width * 0.86f).toInt().coerceAtLeast(10)
+    val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, maxW)
+        .setAlignment(Layout.Alignment.ALIGN_CENTER)
+        .setLineSpacing(0f, 1.1f)
+        .build()
+    val pad = paint.textSize * 0.35f
+    val y = top + height * st.posY - layout.height / 2f
+    var textW = 0f
+    for (i in 0 until layout.lineCount) textW = maxOf(textW, layout.getLineWidth(i))
+    val bgLeft = left + (width - textW) / 2f - pad
+    c.drawRoundRect(
+        RectF(bgLeft, y - pad, left + width - (bgLeft - left), y + layout.height + pad), pad, pad,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb((st.bgAlpha * 255).toInt().coerceIn(0, 255), 0, 0, 0) }
+    )
+    c.save()
+    c.translate(left + (width - maxW) / 2f, y)
+    layout.draw(c)
+    c.restore()
+}
+
+/** SRT-Text aus Untertitel-Blöcken (optional um ein Intro verschoben). */
+fun toSrt(captions: List<Caption>, offsetSec: Double = 0.0): String {
+    fun ts(t: Double): String {
+        val ms = ((t + offsetSec) * 1000).toLong().coerceAtLeast(0)
+        return String.format(java.util.Locale.ROOT, "%02d:%02d:%02d,%03d",
+            ms / 3_600_000, (ms / 60_000) % 60, (ms / 1000) % 60, ms % 1000)
+    }
+    val sb = StringBuilder()
+    captions.forEachIndexed { i, c ->
+        sb.append(i + 1).append('\n')
+            .append(ts(c.start)).append(" --> ").append(ts(c.end)).append('\n')
+            .append(c.text).append("\n\n")
+    }
+    return sb.toString()
+}
+
 /**
- * Zeichnet den jeweils aktuellen Untertitel als bildfüllende Ebene (transparent, Text unten mittig).
+ * Zeichnet den jeweils aktuellen Untertitel als bildfüllende Ebene (transparent).
  * Die Zeit wird relativ zum ersten gesehenen Bild gemessen – so passt es auch, wenn ein Intro davor hängt.
  */
-class CaptionOverlay(private val captions: List<Caption>) : BitmapOverlay() {
+class CaptionOverlay(private val captions: List<Caption>, private val style: SubtitleStyle) : BitmapOverlay() {
 
     private var width = 1080
     private var height = 1920
@@ -171,32 +218,7 @@ class CaptionOverlay(private val captions: List<Caption>) : BitmapOverlay() {
 
     private fun render(text: String): Bitmap {
         val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = minOf(width, height) * 0.058f
-            isFakeBoldText = true
-        }
-        val maxW = (width * 0.86f).toInt()
-        val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, maxW)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setLineSpacing(0f, 1.1f)
-            .build()
-        val pad = paint.textSize * 0.35f
-        val top = height * 0.80f - layout.height / 2f
-        val left = (width - maxW) / 2f
-        // Breite des tatsächlichen Textes für den Hintergrund
-        var textW = 0f
-        for (i in 0 until layout.lineCount) textW = maxOf(textW, layout.getLineWidth(i))
-        val bgLeft = (width - textW) / 2f - pad
-        c.drawRoundRect(
-            RectF(bgLeft, top - pad, width - bgLeft, top + layout.height + pad), pad, pad,
-            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 0, 0, 0) }
-        )
-        c.save()
-        c.translate(left, top)
-        layout.draw(c)
-        c.restore()
+        drawCaption(Canvas(bmp), text, 0f, 0f, width.toFloat(), height.toFloat(), style)
         return bmp
     }
 }
