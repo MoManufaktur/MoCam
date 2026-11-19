@@ -180,6 +180,11 @@ class Settings(ctx: Context) {
         get() = int("lowerSeconds", 5)
         set(v) = p.edit().putInt("lowerSeconds", v).apply()
 
+    /** #5 Zeitraffer-Faktor (0 = aus). */
+    var timelapse: Int
+        get() = int("timelapse", 0)
+        set(v) = p.edit().putInt("timelapse", v).apply()
+
     /** #8 Mikrofon: "auto" (intern bzw. USB automatisch) oder "bluetooth". */
     var micMode: String
         get() = p.getString("micMode", "auto") ?: "auto"

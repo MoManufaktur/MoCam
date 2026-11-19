@@ -55,6 +55,10 @@ class FxState {
     /** #6 Bauchbinde: Startzeit (uptimeMillis, 0 = aus) und Dauer. */
     @Volatile var lowerStartMs = 0L
     @Volatile var lowerDurationMs = 5000L
+    /** #5 Zeitraffer: nur jedes n-te Bild ins Video, Zeitstempel zusammengeschoben. */
+    @Volatile var timelapseFactor = 0
+    @Volatile var timelapseActive = false
+    @Volatile var timelapseGen = 0
 }
 
 /**
@@ -89,6 +93,10 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
     @Volatile private var hasLower = false
     @Volatile private var lowerAspect = 0.2f
     private var lowerTex = 0
+    private var tlGen = -1
+    private var tlCount = 0L
+    private var tlRendered = 0L
+    private var tlBase = 0L
     private var uLower = 0
     private var uLowerRect = 0
     private var uLowerAlpha = 0
@@ -272,7 +280,25 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
             return
         }
         holder.st.getTransformMatrix(stMatrix)
-        val timestamp = holder.st.timestamp
+        var timestamp = holder.st.timestamp
+
+        // #5 Zeitraffer (nur Video-Prozessor): Bilder auslassen, Zeit auf 30 fps zusammenschieben
+        if (burnLogo) {
+            val f = state.timelapseFactor
+            if (f > 1 && state.timelapseActive) {
+                if (tlGen != state.timelapseGen) {
+                    tlGen = state.timelapseGen
+                    tlCount = 0L
+                    tlRendered = 0L
+                    tlBase = timestamp
+                }
+                val skip = tlCount % f != 0L
+                tlCount++
+                if (skip) return
+                timestamp = tlBase + tlRendered * 33_333_333L
+                tlRendered++
+            }
+        }
 
         for ((out, egl) in outputs) {
             if (!EGL14.eglMakeCurrent(display, egl, egl, context)) continue

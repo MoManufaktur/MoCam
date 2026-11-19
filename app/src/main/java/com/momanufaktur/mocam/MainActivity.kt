@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTimer: TextView
     private lateinit var btnLimit: TextView
     private lateinit var btnLower: TextView
+    private lateinit var btnTimelapse: TextView
     private lateinit var audioLevel: android.widget.ProgressBar
     private lateinit var shareBar: View
     private lateinit var shareButtons: LinearLayout
@@ -255,6 +256,7 @@ class MainActivity : AppCompatActivity() {
         btnTimer = findViewById(R.id.btnTimer)
         btnLimit = findViewById(R.id.btnLimit)
         btnLower = findViewById(R.id.btnLower)
+        btnTimelapse = findViewById(R.id.btnTimelapse)
         audioLevel = findViewById(R.id.audioLevel)
         shareBar = findViewById(R.id.shareBar)
         shareButtons = findViewById(R.id.shareButtons)
@@ -329,6 +331,14 @@ class MainActivity : AppCompatActivity() {
 
         // Obere Leiste
         btnFlash.setOnClickListener { cycleFlash() }
+        btnTimelapse.setOnClickListener {
+            if (recording != null) return@setOnClickListener
+            settings.timelapse = when (settings.timelapse) { 0 -> 5; 5 -> 10; 10 -> 30; 30 -> 60; 60 -> 120; else -> 0 }
+            if (settings.timelapse > 0) {
+                toast("Zeitraffer ${settings.timelapse}x – 1 Minute wird zu ${60 / settings.timelapse.coerceAtLeast(1)} s (ohne Ton)")
+            }
+            updateUi()
+        }
         btnLower.setOnClickListener {
             settings.lowerEnabled = !settings.lowerEnabled
             if (settings.lowerEnabled) {
@@ -1219,7 +1229,11 @@ class MainActivity : AppCompatActivity() {
             .build()
         // Persistent: Aufnahme läuft beim Kamerawechsel (vorne/hinten) einfach weiter
         var pending = vc.output.prepareRecording(this, opts).asPersistentRecording()
-        if (settings.audio && granted(Manifest.permission.RECORD_AUDIO)) {
+        val timelapse = settings.timelapse
+        fxState.timelapseFactor = timelapse
+        fxState.timelapseGen++
+        fxState.timelapseActive = timelapse > 1
+        if (timelapse == 0 && settings.audio && granted(Manifest.permission.RECORD_AUDIO)) {
             pending = pending.withAudioEnabled()
         }
         isPaused = false
@@ -1261,6 +1275,7 @@ class MainActivity : AppCompatActivity() {
                 is VideoRecordEvent.Finalize -> {
                     sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
                     recording = null
+                    fxState.timelapseActive = false
                     stopLowerThird()
                     stopBluetoothMic()
                     isPaused = false
@@ -1904,7 +1919,9 @@ class MainActivity : AppCompatActivity() {
         btnLimit.visibility = if (videoMode) View.VISIBLE else View.GONE
         btnLower.text = if (settings.lowerEnabled) "🪪 Bauchbinde an" else "🪪 Bauchbinde aus"
         btnLower.visibility = if (videoMode) View.VISIBLE else View.GONE
-        audioLevel.visibility = if (rec && settings.audio) View.VISIBLE else View.GONE
+        btnTimelapse.text = if (settings.timelapse == 0) "⏩ Zeitraffer aus" else "⏩ Zeitraffer ${settings.timelapse}x"
+        btnTimelapse.visibility = if (videoMode) View.VISIBLE else View.GONE
+        audioLevel.visibility = if (rec && settings.audio && settings.timelapse == 0) View.VISIBLE else View.GONE
         btnGrid.text = if (settings.grid) "▦ Raster an" else "▦ Raster aus"
         btnQuality.text = "🎞 " + qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].second
         btnAudio.text = if (settings.audio) "🎤 Ton an" else "🔇 Ton aus"
@@ -1921,7 +1938,7 @@ class MainActivity : AppCompatActivity() {
             if (!videoMode && availableExtensions.size > 1) View.VISIBLE else View.GONE
 
         recIndicator.visibility = if (rec) View.VISIBLE else View.GONE
-        btnPause.visibility = if (rec) View.VISIBLE else View.GONE
+        btnPause.visibility = if (rec && settings.timelapse == 0) View.VISIBLE else View.GONE
         btnPause.text = if (isPaused) "▶" else "⏸"
         galleryThumb.visibility = if (rec) View.GONE else View.VISIBLE
         btnSwitch.alpha = 1f

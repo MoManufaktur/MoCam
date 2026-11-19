@@ -123,6 +123,7 @@
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLimit" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLower" style="@style/TopChip" />
+                <TextView android:id="@+id/btnTimelapse" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />
                 <TextView android:id="@+id/btnAudio" style="@style/TopChip" />
