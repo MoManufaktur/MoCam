@@ -1903,11 +1903,27 @@ class MainActivity : AppCompatActivity() {
     // Eigene Einstellmenüs mit Live-Vorschau (Bauchbinde, Untertitel)
     // =====================================================================
 
+    private var editorAtTop = false
+
+    /** Menü auf max. 45 % der Höhe begrenzen und oben oder unten anordnen (Vorschau bleibt sichtbar). */
+    private fun placeEditor() {
+        val lp = editorPanel.layoutParams as android.widget.FrameLayout.LayoutParams
+        lp.height = (resources.displayMetrics.heightPixels * 0.45f).toInt()
+        lp.gravity = if (editorAtTop) Gravity.TOP else Gravity.BOTTOM
+        lp.topMargin = if (editorAtTop) topBar.height else 0
+        editorPanel.layoutParams = lp
+    }
+
     private fun openEditor(title: String, build: () -> Unit) {
         settingsPanel.visibility = View.GONE
         bottomPanel.visibility = View.GONE
+        placeEditor()
         editorContent.removeAllViews()
         editorContent.addView(uiText(title, 17f, getColor(R.color.accent), true))
+        val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        quick.addView(peekChip(editorPanel), wrapLp(8))
+        quick.addView(uiChip("⇅ Menü oben/unten") { editorAtTop = !editorAtTop; placeEditor() }, wrapLp(8))
+        editorContent.addView(quick)
         build()
         editorPanel.visibility = View.VISIBLE
     }
@@ -2015,6 +2031,7 @@ class MainActivity : AppCompatActivity() {
     private fun uiButtons(onReset: () -> Unit) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, 0) }
         row.addView(peekChip(editorPanel), wrapLp(8))
+        row.addView(uiChip("⇅ Menü oben/unten") { editorAtTop = !editorAtTop; placeEditor() }, wrapLp(8))
         row.addView(uiChip("Zurücksetzen") { onReset() }, wrapLp(8))
         row.addView(uiChip("✓ Fertig") { closeEditor() }, wrapLp(0))
         editorContent.addView(row)

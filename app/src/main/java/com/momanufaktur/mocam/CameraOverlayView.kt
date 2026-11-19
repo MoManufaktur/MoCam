@@ -47,10 +47,12 @@ class CameraOverlayView @JvmOverloads constructor(
         set(v) { field = v; invalidate() }
     /** #6 Bauchbinde in der Vorschau (gleiche Lage wie im Video). */
     var lowerBitmap: android.graphics.Bitmap? = null
+        set(v) { field = v; invalidate() }
     var lowerStartMs = 0L
         set(v) { field = v; invalidate() }
     var lowerDurationMs = 5000L
     var lowerStyle = LowerThirdStyle()
+        set(v) { field = v; invalidate() }
     /** Bauchbinde dauerhaft zeigen (während sie eingestellt wird). */
     var lowerPinned = false
         set(v) { field = v; invalidate() }
