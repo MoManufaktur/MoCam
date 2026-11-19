@@ -344,6 +344,7 @@ class MainActivity : AppCompatActivity() {
             val on = !settings.logoEnabled
             settings.logoEnabled = on
             processor.logoEnabled = on
+            overlay.showLogo = on
             logoSwitch.isChecked = on
             if (on && logoBitmap == null) toast("Noch kein Logo gewählt – ⚙️ → Logo einstellen")
             updateUi()
@@ -397,6 +398,7 @@ class MainActivity : AppCompatActivity() {
         logoSwitch.isChecked = settings.logoEnabled
         logoSwitch.setOnCheckedChangeListener { _, checked ->
             settings.logoEnabled = checked
+            overlay.showLogo = checked
             updateUi()
             processor.logoEnabled = checked
         }
@@ -407,6 +409,7 @@ class MainActivity : AppCompatActivity() {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
                 val a = max(progress, 5) / 100f
                 processor.logoAlpha = a
+                overlay.logoAlpha = a
                 settings.logoAlpha = a
             }
         })
@@ -633,6 +636,7 @@ class MainActivity : AppCompatActivity() {
         }
         setupCameraControls(bound)
         overlay.drawLogoPreview = !effectActive
+        applyPreviewMirror()
         updateUi()
     }
 
@@ -641,6 +645,11 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private val isFrontCam get() = lensFacing == CameraSelector.LENS_FACING_FRONT
+
+    /** Spiegel der Frontkamera in der Vorschau: einfach die Anzeige umdrehen (Logo-Ebene bleibt lesbar). */
+    private fun applyPreviewMirror() {
+        previewView.scaleX = if (isFrontCam && settings.frontMirror) -1f else 1f
+    }
 
     private fun applyCameraFixes() {
         switchLogoContext()
@@ -705,9 +714,7 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(header)
 
         settingsContent.addView(text(
-            "1. Vorschau einstellen, bis Bild und Logo richtig stehen.\n" +
-            "2. Testvideo bzw. Testfoto machen und in der Galerie ansehen.\n" +
-            "3. „Video“ bzw. „Foto“ so einstellen, dass die Datei wie die Vorschau aussieht.",
+            "Logo-Position, Größe und Drehung gelten je Kamera und Modus.",
             12f, Color.argb(200, 255, 255, 255)
         ).apply { setPadding(0, dp(6), 0, dp(8)) })
 
@@ -719,6 +726,7 @@ class MainActivity : AppCompatActivity() {
                 setOnCheckedChangeListener { _, checked ->
                     settings.frontMirror = checked
                     applyCameraFixes()
+                    applyPreviewMirror()
                 }
             }
             settingsContent.addView(sw)
@@ -729,12 +737,16 @@ class MainActivity : AppCompatActivity() {
         }.apply { setPadding(dp(14), dp(10), dp(14), dp(10)) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
-        settingsContent.addView(text("Bild drehen/spiegeln", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(12), 0, 0) })
+        settingsContent.addView(text("Video-Ausrichtung", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(12), 0, 0) })
+
+        settingsContent.addView(text(
+            "Vorschau und Foto brauchen keine Einstellung – das Logo liegt dort als Ebene über dem Bild. " +
+            "Fürs Video: Testvideo aufnehmen und hier drehen/spiegeln, bis Logo (und Spiegelung) wie in der Vorschau stehen.",
+            12f, Color.argb(200, 255, 255, 255)
+        ).apply { setPadding(0, dp(4), 0, 0) })
 
         listOf(
-            Settings.TARGET_PREVIEW to "Vorschau",
-            Settings.TARGET_VIDEO to "Video-Aufnahme",
-            Settings.TARGET_PHOTO to "Foto"
+            Settings.TARGET_VIDEO to "Video-Aufnahme"
         ).forEach { (target, name) ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -764,8 +776,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(14), 0, 0)
         }
         buttons.addView(chip("Zurücksetzen") {
-            listOf(Settings.TARGET_PREVIEW, Settings.TARGET_VIDEO, Settings.TARGET_PHOTO)
-                .forEach { settings.setFix(front, it, 0) }
+            settings.setFix(front, Settings.TARGET_VIDEO, 0)
             applyCameraFixes()
             buildSettings()
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
@@ -840,7 +851,7 @@ class MainActivity : AppCompatActivity() {
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
         // PreviewView ist ggf. horizontal zurückgespiegelt -> Tippen entsprechend umrechnen
-        val px = x
+        val px = if (previewView.scaleX < 0f) previewView.width - x else x
         val point = previewView.meteringPointFactory.createPoint(px, y)
         val action = FocusMeteringAction.Builder(
             point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
@@ -1019,7 +1030,7 @@ class MainActivity : AppCompatActivity() {
         val logo = if (settings.logoEnabled) logoBitmap else null
         // Drehen/Spiegeln macht MoCam selbst am fertigen Foto (Grundeinstellung + Frontkamera-Spiegel)
         val mirror = isFrontCam && settings.frontMirror
-        val photoFix = settings.getFix(isFrontCam, Settings.TARGET_PHOTO)
+        val photoFix = 0
         val needsProcessing = !filter.isIdentity || logo != null || mirror || photoFix != 0
         val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
 
@@ -1186,7 +1197,10 @@ class MainActivity : AppCompatActivity() {
         overlay.logoCx = settings.logoCx
         overlay.logoCy = settings.logoCy
         overlay.logoW = settings.logoW
-        overlay.dragFix = settings.logoDragFix
+        overlay.logoAlpha = settings.logoAlpha
+        overlay.showLogo = settings.logoEnabled
+        // Vorschau-Logo liegt jetzt im Bildschirm – Finger und Logo bewegen sich immer gleich
+        overlay.dragFix = 0
         logoOriginal?.let { applyLogo(it) }
     }
 
@@ -1198,7 +1212,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyDragFix() {
-        overlay.dragFix = settings.logoDragFix
+        overlay.dragFix = 0
         val v = settings.logoDragFix
         findViewById<TextView>(R.id.dragFixLabel).text =
             "Fingerrichtung: ${(v % 4) * 90}°" + if (v >= 4) " · gespiegelt" else ""

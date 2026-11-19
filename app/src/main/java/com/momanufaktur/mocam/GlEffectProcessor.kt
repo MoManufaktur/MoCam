@@ -280,12 +280,14 @@ class GlEffectProcessor : SurfaceProcessor {
         GLES20.glUniform2f(uPRange, rangeX, rangeY)
 
         // Grundeinstellung für diese Ausgabe (Vorschau oder Video-Aufnahme)
+        // Vorschau: nur Filter – Logo und Spiegel macht dort die Bildschirm-Ebene der App.
+        // Video: Logo und Spiegel werden hier eingebrannt, ausgerichtet mit der Video-Grundeinstellung.
         val isVideo = (out.targets and CameraEffect.VIDEO_CAPTURE) != 0
-        val fix = if (isVideo) videoFix else previewFix
+        val fix = if (isVideo) videoFix else 0
         GLES20.glUniform1f(uFix, fix.toFloat())
-        GLES20.glUniform1f(uWantMirror, if (isFront && frontMirror) 1f else 0f)
+        GLES20.glUniform1f(uWantMirror, if (isVideo && isFront && frontMirror) 1f else 0f)
 
-        val show = logoEnabled && hasLogo
+        val show = isVideo && logoEnabled && hasLogo
         GLES20.glUniform1f(uHasLogo, if (show) 1f else 0f)
         if (show) {
             // Seitenverhältnis in echten Pixeln der Ausgabe, im korrigierten (angezeigten) Bild
@@ -518,6 +520,16 @@ vec2 toSensor(vec2 p) {
     return vec2(1.0 - img.x, img.y);
 }
 
+// Umkehrung von dih()
+vec2 dihInv(vec2 a, float k) {
+    float r = mod(k, 4.0);
+    if (r > 0.5) a = vec2(a.y, 1.0 - a.x);
+    if (r > 1.5) a = vec2(a.y, 1.0 - a.x);
+    if (r > 2.5) a = vec2(a.y, 1.0 - a.x);
+    if (k > 3.5) a.x = 1.0 - a.x;
+    return a;
+}
+
 // Drehen (k % 4) * 90° und ab k >= 4 spiegeln – Grundeinstellung pro Ausgabe
 vec2 dih(vec2 a, float k) {
     if (k > 3.5) a.x = 1.0 - a.x;
@@ -533,10 +545,13 @@ void main() {
     vec2 q = (toUpright(vS) - uPMin) / uPRange;
     vec2 d = dih(q, uFix);
 
-    // Kamerabild im angezeigten Bild abtasten – optional links/rechts gespiegelt
-    vec2 qs = d;
-    if (uWantMirror > 0.5) qs.x = 1.0 - qs.x;
-    vec2 sCam = toSensor(uPMin + qs * uPRange);
+    // Kamerabild unverändert übernehmen (Drehung macht CameraX korrekt) –
+    // nur bei gewünschter Spiegelung im angezeigten Bild links/rechts tauschen
+    vec2 sCam = vS;
+    if (uWantMirror > 0.5) {
+        vec2 qm = dihInv(vec2(1.0 - d.x, d.y), uFix);
+        sCam = toSensor(uPMin + qm * uPRange);
+    }
     vec2 tc = (uTex * vec4(sCam, 0.0, 1.0)).xy;
 
     vec3 c = texture2D(uCam, tc).rgb;
