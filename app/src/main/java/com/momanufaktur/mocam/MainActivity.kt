@@ -84,6 +84,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLimit: TextView
     private lateinit var btnLower: TextView
     private lateinit var btnTimelapse: TextView
+    private lateinit var processingText: TextView
+    private lateinit var post: PostProcessor
+    private var recordingFolder = ""
     private lateinit var audioLevel: android.widget.ProgressBar
     private lateinit var shareBar: View
     private lateinit var shareButtons: LinearLayout
@@ -184,6 +187,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val pickIntro =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) importClip(uri, introFile())
+        }
+    private val pickOutro =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) importClip(uri, outroFile())
+        }
+
     private val pickLogo =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri != null) importLogo(uri)
@@ -202,6 +214,16 @@ class MainActivity : AppCompatActivity() {
         settings = Settings(this)
         processor = GlEffectProcessor(fxState, burnLogo = false)
         videoProcessor = GlEffectProcessor(fxState, burnLogo = true)
+        post = PostProcessor(this).apply {
+            onStatus = { msg ->
+                processingText.text = msg ?: ""
+                processingText.visibility = if (msg == null) View.GONE else View.VISIBLE
+            }
+            onDone = { uri, msg ->
+                if (uri != null) setLastMedia(uri, true)
+                msg?.let { toast(it) }
+            }
+        }
 
         bindViews()
         restoreSettings()
@@ -257,6 +279,7 @@ class MainActivity : AppCompatActivity() {
         btnLimit = findViewById(R.id.btnLimit)
         btnLower = findViewById(R.id.btnLower)
         btnTimelapse = findViewById(R.id.btnTimelapse)
+        processingText = findViewById(R.id.processingText)
         audioLevel = findViewById(R.id.audioLevel)
         shareBar = findViewById(R.id.shareBar)
         shareButtons = findViewById(R.id.shareButtons)
@@ -904,6 +927,45 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(text("USB-Mikrofone werden automatisch genutzt. Der Pegel erscheint während der Aufnahme oben (rot = zu laut).",
             11f, Color.argb(170, 255, 255, 255)).apply { setPadding(0, dp(4), 0, 0) })
 
+        // ---------- #10 Intro & Outro ----------
+        settingsContent.addView(text("🎬 Intro & Outro", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        settingsContent.addView(SwitchCompat(this).apply {
+            text = "An jedes Video automatisch anhängen"
+            setTextColor(Color.WHITE)
+            isChecked = settings.introOutroEnabled
+            setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
+        })
+        val clipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        clipRow.addView(chip(if (introFile().exists()) "Intro ✓ ändern" else "Intro wählen") { pickIntro.launch("video/*") },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        clipRow.addView(chip(if (outroFile().exists()) "Outro ✓ ändern" else "Outro wählen") { pickOutro.launch("video/*") },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        clipRow.addView(chip("Entfernen") {
+            introFile().delete(); outroFile().delete()
+            toast("Intro und Outro entfernt")
+            buildSettings()
+        })
+        settingsContent.addView(clipRow)
+
+        // ---------- #9 Untertitel ----------
+        settingsContent.addView(text("💬 Untertitel (Deutsch, offline)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        settingsContent.addView(SwitchCompat(this).apply {
+            text = "Automatisch erkennen und einbrennen"
+            setTextColor(Color.WHITE)
+            isChecked = settings.subtitlesEnabled
+            setOnCheckedChangeListener { _, c ->
+                settings.subtitlesEnabled = c
+                if (c && !Subtitles.isModelReady(this@MainActivity)) toast("Bitte zuerst das Sprachmodell laden")
+            }
+        })
+        val modelText = text(if (Subtitles.isModelReady(this)) "Sprachmodell: bereit ✓" else "Sprachmodell: noch nicht geladen (ca. 45 MB, einmalig)",
+            12f, Color.argb(200, 255, 255, 255))
+        settingsContent.addView(modelText)
+        if (!Subtitles.isModelReady(this)) {
+            settingsContent.addView(chip("⬇ Sprachmodell laden") { downloadModel(modelText) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+        }
+
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(14), 0, 0)
@@ -1223,6 +1285,7 @@ class MainActivity : AppCompatActivity() {
     private fun startRecording() {
         val vc = videoCapture ?: return
         MediaStoreUtil.subFolder = currentFolder()
+        recordingFolder = MediaStoreUtil.subFolder
         if (settings.audio && settings.micMode == "bluetooth") startBluetoothMic()
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
@@ -1282,7 +1345,7 @@ class MainActivity : AppCompatActivity() {
                     prompterView.playing = false
                     if (!event.hasError() || event.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE) {
                         setLastMedia(event.outputResults.outputUri, true)
-                        toast("Video gespeichert")
+                        if (!startPostProcessing(event.outputResults.outputUri)) toast("Video gespeichert")
                     } else {
                         Log.e(TAG, "Video-Fehler ${event.error}", event.cause)
                         toast("Videofehler (${event.error})")
@@ -1678,6 +1741,54 @@ class MainActivity : AppCompatActivity() {
         bg.execute {
             val thumb = MediaStoreUtil.loadThumbnail(this, uri, isVideo)
             runOnUiThread { if (thumb != null) galleryThumb.setImageBitmap(thumb) }
+        }
+    }
+
+    // =====================================================================
+    // #9 / #10 Nachbearbeitung
+    // =====================================================================
+
+    private fun introFile() = File(filesDir, "intro.mp4")
+    private fun outroFile() = File(filesDir, "outro.mp4")
+
+    private fun importClip(uri: Uri, target: File) {
+        toast("Clip wird übernommen …")
+        bg.execute {
+            val ok = try {
+                contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use { input.copyTo(it) } } != null
+            } catch (e: Exception) { false }
+            runOnUiThread {
+                toast(if (ok) "Gespeichert" else "Clip konnte nicht geladen werden")
+                if (settingsPanel.visibility == View.VISIBLE) buildSettings()
+            }
+        }
+    }
+
+    /** Startet Untertitel und/oder Intro/Outro für ein fertiges Video. @return true wenn gestartet. */
+    private fun startPostProcessing(uri: Uri): Boolean {
+        val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this) && settings.timelapse == 0
+        val intro = if (settings.introOutroEnabled) introFile().takeIf { it.exists() } else null
+        val outro = if (settings.introOutroEnabled) outroFile().takeIf { it.exists() } else null
+        if (!subs && intro == null && outro == null) return false
+        post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro))
+        toast("Video gespeichert – wird jetzt bearbeitet")
+        return true
+    }
+
+    private fun downloadModel(status: TextView) {
+        status.text = "Sprachmodell wird geladen … 0 %"
+        bg.execute {
+            val ok = try {
+                Subtitles.downloadModel(this) { p -> runOnUiThread { status.text = "Sprachmodell wird geladen … $p %" } }
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Modell-Download", e)
+                false
+            }
+            runOnUiThread {
+                status.text = if (ok) "Sprachmodell: bereit ✓" else "Download fehlgeschlagen – Internet prüfen"
+                if (ok && settingsPanel.visibility == View.VISIBLE) buildSettings()
+            }
         }
     }
 

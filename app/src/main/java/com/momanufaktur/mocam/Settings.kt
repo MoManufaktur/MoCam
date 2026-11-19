@@ -190,6 +190,16 @@ class Settings(ctx: Context) {
         get() = p.getString("micMode", "auto") ?: "auto"
         set(v) = p.edit().putString("micMode", v).apply()
 
+    /** #10 Intro/Outro an jedes Video anhängen. */
+    var introOutroEnabled: Boolean
+        get() = bool("introOutro", false)
+        set(v) = p.edit().putBoolean("introOutro", v).apply()
+
+    /** #9 Untertitel automatisch einbrennen. */
+    var subtitlesEnabled: Boolean
+        get() = bool("subtitles", false)
+        set(v) = p.edit().putBoolean("subtitles", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"
