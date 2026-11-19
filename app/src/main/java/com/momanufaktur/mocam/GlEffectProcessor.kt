@@ -35,16 +35,8 @@ import kotlin.math.abs
  * (0..1, Ursprung oben links) und für jede Ausgabe über die Sensorkoordinaten
  * zurückgerechnet. Dadurch landet es in Vorschau und Video an derselben Stelle.
  */
-class GlEffectProcessor : SurfaceProcessor {
-
-    private val thread = HandlerThread("MoCamGL").apply { start() }
-    private val handler = Handler(thread.looper)
-    val executor: Executor = Executor { handler.post(it) }
-
-    /** Wird (auf dem GL-Thread) mit der Eingangsauflösung aufgerufen. */
-    @Volatile var onInputSize: ((Int, Int) -> Unit)? = null
-
-    // ---- Zustand, wird vom UI-Thread gesetzt ----
+/** Einstellungen, die Vorschau- und Video-Prozessor gemeinsam lesen. */
+class FxState {
     @Volatile var filter: Filter = Filters.ALL[0]
     @Volatile var logoEnabled = false
     @Volatile var logoCx = 0.82f
@@ -53,16 +45,41 @@ class GlEffectProcessor : SurfaceProcessor {
     @Volatile var logoAlpha = 1f
     /** Drehung Sensor -> aufrechtes Bild (meist 90 hinten, 270 vorne). */
     @Volatile var rotationDegrees = 90
-    /** Frontkamera aktiv. */
     @Volatile var isFront = false
-    /** Frontkamera spiegeln (links/rechts, wie ein Spiegel) – Vorschau und Aufnahme. */
+    /** Frontkamera spiegeln (links/rechts, wie ein Spiegel). */
     @Volatile var frontMirror = false
-    /**
-     * Grundeinstellungen der aktuellen Kamera: Korrektur für Vorschau bzw. Video-Aufnahme.
-     * 0..7: Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt. Wirkt auf Bild UND Logo.
-     */
     @Volatile var previewFix = 0
+    /** Video: Ausrichtung des Logos (0..7) und Spiegel-Korrektur des Bildes. */
     @Volatile var videoFix = 0
+    @Volatile var videoFlip = false
+}
+
+/**
+ * @param burnLogo true = Video-Prozessor: brennt Logo (und Spiegel) ein.
+ *                 false = Vorschau-Prozessor: nur Filter (Logo liegt dort als Bildschirm-Ebene).
+ */
+class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolean) : SurfaceProcessor {
+
+    private val thread = HandlerThread("MoCamGL").apply { start() }
+    private val handler = Handler(thread.looper)
+    val executor: Executor = Executor { handler.post(it) }
+
+    /** Wird (auf dem GL-Thread) mit der Eingangsauflösung aufgerufen. */
+    @Volatile var onInputSize: ((Int, Int) -> Unit)? = null
+
+    // ---- Zustand: gemeinsam für Vorschau- und Video-Prozessor (FxState) ----
+    var filter: Filter get() = state.filter; set(v) { state.filter = v }
+    var logoEnabled: Boolean get() = state.logoEnabled; set(v) { state.logoEnabled = v }
+    var logoCx: Float get() = state.logoCx; set(v) { state.logoCx = v }
+    var logoCy: Float get() = state.logoCy; set(v) { state.logoCy = v }
+    var logoW: Float get() = state.logoW; set(v) { state.logoW = v }
+    var logoAlpha: Float get() = state.logoAlpha; set(v) { state.logoAlpha = v }
+    var rotationDegrees: Int get() = state.rotationDegrees; set(v) { state.rotationDegrees = v }
+    var isFront: Boolean get() = state.isFront; set(v) { state.isFront = v }
+    var frontMirror: Boolean get() = state.frontMirror; set(v) { state.frontMirror = v }
+    var previewFix: Int get() = state.previewFix; set(v) { state.previewFix = v }
+    var videoFix: Int get() = state.videoFix; set(v) { state.videoFix = v }
+    var videoFlip: Boolean get() = state.videoFlip; set(v) { state.videoFlip = v }
 
     @Volatile private var logoAspect = 1f // Höhe / Breite
     @Volatile private var hasLogo = false
@@ -282,10 +299,11 @@ class GlEffectProcessor : SurfaceProcessor {
         // Grundeinstellung für diese Ausgabe (Vorschau oder Video-Aufnahme)
         // Vorschau: nur Filter – Logo und Spiegel macht dort die Bildschirm-Ebene der App.
         // Video: Logo und Spiegel werden hier eingebrannt, ausgerichtet mit der Video-Grundeinstellung.
-        val isVideo = (out.targets and CameraEffect.VIDEO_CAPTURE) != 0
+        val isVideo = burnLogo
         val fix = if (isVideo) videoFix else 0
         GLES20.glUniform1f(uFix, fix.toFloat())
-        GLES20.glUniform1f(uWantMirror, if (isVideo && isFront && frontMirror) 1f else 0f)
+        val mirrorVideo = (isFront && frontMirror) != videoFlip
+        GLES20.glUniform1f(uWantMirror, if (isVideo && mirrorVideo) 1f else 0f)
 
         val show = isVideo && logoEnabled && hasLogo
         GLES20.glUniform1f(uHasLogo, if (show) 1f else 0f)

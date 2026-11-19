@@ -113,6 +113,13 @@ class Settings(ctx: Context) {
         p.edit().putInt(fixKey(front, target), v).apply()
     }
 
+    /** Video: Bild links/rechts tauschen (falls die Aufnahme gegenüber der Vorschau gespiegelt ist). */
+    fun getVideoFlip(front: Boolean): Boolean = p.getBoolean("videoFlip_" + if (front) "front" else "rear", false)
+
+    fun setVideoFlip(front: Boolean, v: Boolean) {
+        p.edit().putBoolean("videoFlip_" + (if (front) "front" else "rear"), v).apply()
+    }
+
     private fun fixKey(front: Boolean, target: String) = "fix_" + (if (front) "front_" else "rear_") + target
 
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */

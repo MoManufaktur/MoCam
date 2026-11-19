@@ -116,7 +116,10 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------- Zustand ----------------
     private lateinit var settings: Settings
+    private val fxState = FxState()
+    /** Vorschau: nur Filter. Video: Filter + Logo + Spiegel. Beide lesen fxState. */
     private lateinit var processor: GlEffectProcessor
+    private lateinit var videoProcessor: GlEffectProcessor
     private lateinit var mainExec: Executor
     private val bg = Executors.newSingleThreadExecutor()
     private val sound = MediaActionSound()
@@ -191,7 +194,8 @@ class MainActivity : AppCompatActivity() {
 
         mainExec = ContextCompat.getMainExecutor(this)
         settings = Settings(this)
-        processor = GlEffectProcessor()
+        processor = GlEffectProcessor(fxState, burnLogo = false)
+        videoProcessor = GlEffectProcessor(fxState, burnLogo = true)
 
         bindViews()
         restoreSettings()
@@ -217,6 +221,7 @@ class MainActivity : AppCompatActivity() {
         recording?.close()
         cameraProvider?.unbindAll()
         processor.release()
+        videoProcessor.release()
         sound.release()
         bg.shutdown()
     }
@@ -591,13 +596,25 @@ class MainActivity : AppCompatActivity() {
                 VideoCapture.withOutput(recorder)
             }
             videoCapture = vc
-            val fx = CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE
-
-            bound = tryBind(provider, base, group(fx, true, preview, vc))
-            if (bound == null && !fmt.isDefault) {
-                bound = tryBind(provider, base, group(fx, false, preview, vc))
-                if (bound != null) toast("Format ${fmt.label} wird hier nicht unterstützt – 9:16/3:4 aktiv.")
+            // Getrennte Wege: Vorschau nur mit Filter, Aufnahme mit Filter + Logo
+            fun splitGroup(withViewPort: Boolean): UseCaseGroup {
+                val b = UseCaseGroup.Builder().addUseCase(preview).addUseCase(vc)
+                    .addEffect(FxEffect(CameraEffect.PREVIEW, processor))
+                    .addEffect(FxEffect(CameraEffect.VIDEO_CAPTURE, videoProcessor))
+                if (withViewPort) b.setViewPort(viewPort)
+                return b.build()
             }
+            fun videoOnlyGroup(withViewPort: Boolean): UseCaseGroup {
+                val b = UseCaseGroup.Builder().addUseCase(preview).addUseCase(vc)
+                    .addEffect(FxEffect(CameraEffect.VIDEO_CAPTURE, videoProcessor))
+                if (withViewPort) b.setViewPort(viewPort)
+                return b.build()
+            }
+
+            bound = tryBind(provider, base, splitGroup(true))
+                ?: tryBind(provider, base, splitGroup(false))
+                ?: tryBind(provider, base, videoOnlyGroup(true))
+                ?: tryBind(provider, base, videoOnlyGroup(false))
             effectActive = bound != null
             if (bound == null) {
                 toast("Filter/Logo-Effekt wird von diesem Gerät nicht unterstützt.")
@@ -668,6 +685,7 @@ class MainActivity : AppCompatActivity() {
         processor.frontMirror = settings.frontMirror
         processor.previewFix = settings.getFix(isFrontCam, Settings.TARGET_PREVIEW)
         processor.videoFix = settings.getFix(isFrontCam, Settings.TARGET_VIDEO)
+        processor.videoFlip = settings.getVideoFlip(isFrontCam)
     }
 
     private fun fixLabel(v: Int): String {
@@ -752,7 +770,8 @@ class MainActivity : AppCompatActivity() {
 
         settingsContent.addView(text(
             "Vorschau und Foto brauchen keine Einstellung – das Logo liegt dort als Ebene über dem Bild. " +
-            "Fürs Video: Testvideo aufnehmen und hier drehen/spiegeln, bis Logo (und Spiegelung) wie in der Vorschau stehen.",
+            "Fürs Video: Testvideo aufnehmen. Ist das Bild gegenüber der Vorschau gespiegelt → „Bild ⇋“. " +
+            "Steht das Logo anders als in der Vorschau → „Logo ↻ / ⇋“, bis es passt.",
             12f, Color.argb(200, 255, 255, 255)
         ).apply { setPadding(0, dp(4), 0, 0) })
 
@@ -771,16 +790,32 @@ class MainActivity : AppCompatActivity() {
                 applyCameraFixes()
                 value.text = name + "\n" + fixLabel(v)
             }
-            row.addView(chip("↻ 90°") {
+            row.addView(chip("Logo ↻ 90°") {
                 val v = settings.getFix(front, target)
                 update((v / 4) * 4 + (v % 4 + 1) % 4)
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-            row.addView(chip("⇋ Spiegeln") {
+            row.addView(chip("Logo ⇋") {
                 val v = settings.getFix(front, target)
                 update((v + 4) % 8)
             })
             settingsContent.addView(row)
         }
+
+        // Bild der Video-Aufnahme links/rechts tauschen (falls das Video gegenüber der Vorschau gespiegelt ist)
+        val flipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
+        }
+        val flipText = text("Video-Bild\n" + if (settings.getVideoFlip(front)) "gespiegelt" else "normal", 13f)
+        flipRow.addView(flipText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        flipRow.addView(chip("Bild ⇋") {
+            val v = !settings.getVideoFlip(front)
+            settings.setVideoFlip(front, v)
+            applyCameraFixes()
+            flipText.text = "Video-Bild\n" + if (v) "gespiegelt" else "normal"
+        })
+        settingsContent.addView(flipRow)
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -788,6 +823,7 @@ class MainActivity : AppCompatActivity() {
         }
         buttons.addView(chip("Zurücksetzen") {
             settings.setFix(front, Settings.TARGET_VIDEO, 0)
+            settings.setVideoFlip(front, false)
             applyCameraFixes()
             buildSettings()
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
@@ -1229,6 +1265,7 @@ class MainActivity : AppCompatActivity() {
             logoOriginal = null
             logoBitmap = null
             processor.setLogo(null)
+            videoProcessor.setLogo(null)
             overlay.logoBitmap = null
             overlay.hasLogo = false
             return
@@ -1444,6 +1481,7 @@ class MainActivity : AppCompatActivity() {
                         logoOriginal = null
                         loadedLogoName = null
                         processor.setLogo(null)
+                        videoProcessor.setLogo(null)
                         overlay.hasLogo = false
                         refreshLogoLibrary()
                     }
@@ -1510,6 +1548,7 @@ class MainActivity : AppCompatActivity() {
         }
         logoBitmap = bmp
         processor.setLogo(bmp)
+        videoProcessor.setLogo(bmp)
         overlay.logoAspect = bmp.height.toFloat() / bmp.width
         overlay.logoBitmap = bmp
         overlay.hasLogo = true
