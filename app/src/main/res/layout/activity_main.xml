@@ -335,6 +335,19 @@
             android:textSize="18sp"
             android:textStyle="bold" />
 
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/logoTabs"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -469,6 +482,14 @@
                 android:layout_weight="1"
                 android:text="Fertig" />
         </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLogoCopyAll"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:text="Dieses Register für alle übernehmen" />
     </LinearLayout>
     <!-- Grundeinstellungen -->
     <ScrollView

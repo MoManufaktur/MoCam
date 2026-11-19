@@ -68,6 +68,22 @@ class Settings(ctx: Context) {
         get() = lf("logoAlpha", 1f)
         set(v) = p.edit().putFloat(lk("logoAlpha"), v).apply()
 
+    /** Alle vier Register (Foto/Video × Rück/Front). */
+    val logoContexts = listOf("rear_photo", "front_photo", "rear_video", "front_video")
+
+    /** Überträgt Logo, Position, Größe, Deckkraft und Drehung des aktuellen Registers auf alle anderen. */
+    fun copyLogoToAllContexts() {
+        val cx = logoCx; val cy = logoCy; val w = logoW; val a = logoAlpha
+        val rot = logoRotation; val logo = selectedLogo
+        val e = p.edit()
+        logoContexts.forEach { c ->
+            e.putFloat("logoCx_$c", cx).putFloat("logoCy_$c", cy).putFloat("logoW_$c", w)
+                .putFloat("logoAlpha_$c", a).putInt("logoRotation_$c", rot)
+                .putString("selectedLogo_$c", logo)
+        }
+        e.apply()
+    }
+
     /** Fingerrichtung beim Verschieben (0..7: Drehung (Wert % 4) * 90°, ab 4 gespiegelt). */
     var logoDragFix: Int
         get() = p.getInt(lk("logoDragFix"), 0)
@@ -101,8 +117,8 @@ class Settings(ctx: Context) {
 
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?
-        get() = p.getString("selectedLogo", null)
-        set(v) = p.edit().putString("selectedLogo", v).apply()
+        get() = p.getString(lk("selectedLogo"), p.getString("selectedLogo", null))
+        set(v) = p.edit().putString(lk("selectedLogo"), v).apply()
 
     var prompterText: String
         get() = p.getString("prompterText", "") ?: ""

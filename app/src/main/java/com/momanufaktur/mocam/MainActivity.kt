@@ -415,6 +415,17 @@ class MainActivity : AppCompatActivity() {
         })
         findViewById<View>(R.id.btnPickLogo).setOnClickListener { pickLogo.launch("image/*") }
         findViewById<View>(R.id.btnLogoDone).setOnClickListener { closeLogoPanel() }
+        findViewById<View>(R.id.btnLogoCopyAll).setOnClickListener {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Für alle Register übernehmen?")
+                .setMessage("Logo, Position, Größe, Deckkraft und Drehung von „${logoContextName()}“ gelten danach für Foto und Video, Rück- und Frontkamera.")
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Übernehmen") { _, _ ->
+                    settings.copyLogoToAllContexts()
+                    toast("Für alle Register übernommen")
+                }
+                .show()
+        }
         findViewById<View>(R.id.btnLogoReset).setOnClickListener {
             overlay.logoCx = 0.80f
             overlay.logoCy = 0.10f
@@ -1162,8 +1173,7 @@ class MainActivity : AppCompatActivity() {
         settingsPanel.visibility = View.GONE
         bottomPanel.visibility = View.GONE
         logoPanel.visibility = View.VISIBLE
-        findViewById<TextView>(R.id.logoPanelTitle).text = "Logo – " + logoContextName()
-        logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
+        refreshLogoPanel()
         applyDragFix()
         overlay.editLogo = true
         if (!effectActive) toast("In diesem Modus keine Live-Vorschau des Logos.")
@@ -1201,7 +1211,97 @@ class MainActivity : AppCompatActivity() {
         overlay.showLogo = settings.logoEnabled
         // Vorschau-Logo liegt jetzt im Bildschirm – Finger und Logo bewegen sich immer gleich
         overlay.dragFix = 0
-        logoOriginal?.let { applyLogo(it) }
+        loadContextLogoBitmap()
+    }
+
+    /** Lädt das Logo, das für dieses Register gewählt ist (jedes Register kann ein eigenes haben). */
+    private var loadedLogoName: String? = null
+
+    private fun loadContextLogoBitmap() {
+        val name = settings.selectedLogo
+        if (name == loadedLogoName && logoOriginal != null) {
+            logoOriginal?.let { applyLogo(it) }
+            return
+        }
+        val file = name?.let { File(logoDir(), it) }?.takeIf { it.exists() }
+        if (file == null) {
+            loadedLogoName = null
+            logoOriginal = null
+            logoBitmap = null
+            processor.setLogo(null)
+            overlay.logoBitmap = null
+            overlay.hasLogo = false
+            return
+        }
+        bg.execute {
+            val bmp = BitmapFactory.decodeFile(file.path)
+            runOnUiThread {
+                if (bmp != null && settings.selectedLogo == file.name) {
+                    loadedLogoName = file.name
+                    applyLogo(bmp)
+                    if (logoPanel.visibility == View.VISIBLE) refreshLogoLibrary()
+                }
+            }
+        }
+    }
+
+    // ---------------- Register im Logo-Menü ----------------
+
+    private fun buildLogoTabs() {
+        val tabs = findViewById<LinearLayout>(R.id.logoTabs)
+        tabs.removeAllViews()
+        val current = logoContextKey()
+        listOf(
+            "rear_photo" to "📷 Foto · Rück",
+            "front_photo" to "📷 Foto · Front",
+            "rear_video" to "🎬 Video · Rück",
+            "front_video" to "🎬 Video · Front"
+        ).forEach { (key, label) ->
+            val sel = key == current
+            val tv = TextView(this).apply {
+                text = label
+                textSize = 13f
+                setTextColor(if (sel) Color.BLACK else Color.WHITE)
+                setBackgroundResource(if (sel) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                setOnClickListener { selectLogoTab(key) }
+            }
+            tabs.addView(tv, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(6) })
+        }
+    }
+
+    /** Register wählen = passende Kamera und Modus aktivieren, damit du live siehst, was du einstellst. */
+    private fun selectLogoTab(key: String) {
+        if (key == logoContextKey()) return
+        if (recording != null) {
+            toast("Während der Aufnahme nicht möglich.")
+            return
+        }
+        val wantFront = key.startsWith("front")
+        val wantVideo = key.endsWith("video")
+        lensFacing = if (wantFront) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+        if (videoMode != wantVideo) {
+            videoMode = wantVideo
+            settings.videoMode = wantVideo
+            flashMode = FLASH_OFF
+            if (!wantVideo) {
+                prompterView.playing = false
+                prompterBox.visibility = View.GONE
+            }
+        }
+        extensionMode = ExtensionMode.NONE
+        bindCamera()
+        refreshLogoPanel()
+        updateUi()
+    }
+
+    private fun refreshLogoPanel() {
+        findViewById<TextView>(R.id.logoPanelTitle).text = "Logo – " + logoContextName()
+        logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
+        buildLogoTabs()
+        refreshLogoLibrary()
     }
 
     private fun switchLogoContext() {
@@ -1243,6 +1343,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (file != null && bmp != null) {
                     settings.selectedLogo = file.name
+                    loadedLogoName = file.name
                     applyLogo(bmp)
                 }
                 refreshLogoLibrary()
@@ -1298,6 +1399,7 @@ class MainActivity : AppCompatActivity() {
                     toast("Logo konnte nicht geladen werden.")
                 } else {
                     settings.selectedLogo = savedName
+                    loadedLogoName = savedName
                     applyLogo(bmp)
                     enableLogo()
                     refreshLogoLibrary()
@@ -1316,6 +1418,7 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 settings.selectedLogo = file.name
+                loadedLogoName = file.name
                 applyLogo(bmp)
                 enableLogo()
                 refreshLogoLibrary()
@@ -1339,6 +1442,7 @@ class MainActivity : AppCompatActivity() {
                         settings.selectedLogo = null
                         logoBitmap = null
                         logoOriginal = null
+                        loadedLogoName = null
                         processor.setLogo(null)
                         overlay.hasLogo = false
                         refreshLogoLibrary()
