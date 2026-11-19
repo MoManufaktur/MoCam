@@ -233,6 +233,11 @@ class Settings(ctx: Context) {
         get() = p.getString("sub_mode", "burn") ?: "burn"
         set(v) = p.edit().putString("sub_mode", v).apply()
 
+    /** Obere Buttonleiste: false = eine Zeile scrollbar, true = alle sichtbar (mehrere Zeilen). */
+    var topBarWrap: Boolean
+        get() = bool("topBarWrap", false)
+        set(v) = p.edit().putBoolean("topBarWrap", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"

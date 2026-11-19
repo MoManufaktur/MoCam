@@ -100,6 +100,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsPanel: View
     private lateinit var settingsContent: LinearLayout
     private lateinit var editorPanel: View
+    private lateinit var topScroll: View
+    private lateinit var topChips: LinearLayout
+    private lateinit var topFlow: FlowLayout
+    private lateinit var recentPanel: View
+    private lateinit var recentContent: LinearLayout
     private lateinit var editorContent: LinearLayout
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
@@ -228,6 +233,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         bindViews()
+        applyTopBarMode()
+        // Vorschau-Knopf im Logo-Menü (unter Titel und Registern)
+        (logoPanel as LinearLayout).addView(peekChip(logoPanel), 2,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        findViewById<View>(R.id.btnRecent).setOnClickListener { openRecent() }
         restoreSettings()
         setupUi()
         loadSavedLogo()
@@ -295,6 +305,11 @@ class MainActivity : AppCompatActivity() {
         settingsPanel = findViewById(R.id.settingsPanel)
         settingsContent = findViewById(R.id.settingsContent)
         editorPanel = findViewById(R.id.editorPanel)
+        topScroll = findViewById(R.id.topScroll)
+        topChips = findViewById(R.id.topChips)
+        topFlow = findViewById(R.id.topFlow)
+        recentPanel = findViewById(R.id.recentPanel)
+        recentContent = findViewById(R.id.recentContent)
         editorContent = findViewById(R.id.editorContent)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
@@ -911,6 +926,23 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(micRow)
         settingsContent.addView(text("USB-Mikrofone werden automatisch genutzt. Der Pegel erscheint während der Aufnahme oben (rot = zu laut).",
             11f, Color.argb(170, 255, 255, 255)).apply { setPadding(0, dp(4), 0, 0) })
+
+        // ---------- Ansicht ----------
+        settingsContent.addView(text("🧭 Ansicht", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        val viewRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        val scrollChip = uiChip("Buttonleiste: scrollbar", !settings.topBarWrap) {}
+        val wrapChip = uiChip("Alle Buttons sichtbar", settings.topBarWrap) {}
+        fun markView() {
+            listOf(scrollChip to !settings.topBarWrap, wrapChip to settings.topBarWrap).forEach { (v, sel) ->
+                v.setBackgroundResource(if (sel) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+                v.setTextColor(if (sel) Color.BLACK else Color.WHITE)
+            }
+        }
+        scrollChip.setOnClickListener { settings.topBarWrap = false; applyTopBarMode(); markView() }
+        wrapChip.setOnClickListener { settings.topBarWrap = true; applyTopBarMode(); markView() }
+        viewRow.addView(scrollChip, wrapLp())
+        viewRow.addView(wrapChip, wrapLp())
+        settingsContent.addView(viewRow)
 
         // ---------- #10 Intro & Outro ----------
         settingsContent.addView(text("🎬 Intro & Outro", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
@@ -1720,6 +1752,154 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // Vorschau-Knopf: gedrückt halten = Einstellungen ausblenden
+    // =====================================================================
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun peekChip(panel: View): TextView = TextView(this).apply {
+        text = "👁 Gedrückt halten = Vorschau"
+        textSize = 13f
+        setTextColor(Color.BLACK)
+        setBackgroundResource(R.drawable.chip_bg_selected)
+        setPadding(dp(12), dp(7), dp(12), dp(7))
+        setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    panel.animate().cancel(); panel.alpha = 0f
+                    topBar.alpha = 0f
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    panel.alpha = 1f
+                    topBar.alpha = 1f
+                }
+            }
+            true
+        }
+    }
+
+    // =====================================================================
+    // Obere Buttonleiste: scrollbar oder alle sichtbar
+    // =====================================================================
+
+    private fun applyTopBarMode() {
+        val wrap = settings.topBarWrap
+        val from: android.view.ViewGroup = if (wrap) topChips else topFlow
+        val to: android.view.ViewGroup = if (wrap) topFlow else topChips
+        val views = (0 until from.childCount).map { from.getChildAt(it) }
+        from.removeAllViews()
+        views.forEach { to.addView(it) }
+        topScroll.visibility = if (wrap) View.GONE else View.VISIBLE
+        topFlow.visibility = if (wrap) View.VISIBLE else View.GONE
+    }
+
+    // =====================================================================
+    // Letzte Aufnahmen (in der App) – erneut teilen
+    // =====================================================================
+
+    private data class RecentItem(val uri: Uri, val isVideo: Boolean, val date: Long)
+
+    private fun queryRecent(limit: Int = 45): List<RecentItem> {
+        val out = mutableListOf<RecentItem>()
+        listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true
+        ).forEach { (collection, isVideo) ->
+            val (sel, args) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?" to arrayOf("%${MediaStoreUtil.FOLDER}%")
+            else
+                "${MediaStore.MediaColumns.DATA} LIKE ?" to arrayOf("%/${MediaStoreUtil.FOLDER}/%")
+            try {
+                contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED),
+                    sel, args, "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { c ->
+                    var n = 0
+                    while (c.moveToNext() && n < limit) {
+                        out += RecentItem(android.content.ContentUris.withAppendedId(collection, c.getLong(0)), isVideo, c.getLong(1))
+                        n++
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Letzte Aufnahmen", e)
+            }
+        }
+        return out.sortedByDescending { it.date }.take(limit)
+    }
+
+    private fun openRecent() {
+        if (recording != null) return
+        recentContent.removeAllViews()
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        header.addView(uiText("🗂 Letzte Aufnahmen", 17f, getColor(R.color.accent), true),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(uiChip("✕ Schließen") { recentPanel.visibility = View.GONE })
+        recentContent.addView(header)
+
+        val info = uiText("Tippe eine Aufnahme an, um sie zu teilen.", 12f, Color.argb(200, 255, 255, 255))
+        recentContent.addView(info)
+        val actions = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; visibility = View.GONE }
+        val actionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(actionRow)
+        recentContent.addView(actions)
+
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        recentContent.addView(grid)
+        recentPanel.visibility = View.VISIBLE
+
+        bg.execute {
+            val items = queryRecent()
+            runOnUiThread {
+                if (items.isEmpty()) {
+                    info.text = "Noch keine Aufnahmen in MoCam gefunden."
+                    return@runOnUiThread
+                }
+                val cell = (resources.displayMetrics.widthPixels - dp(24) - dp(8) * 2) / 3
+                var row: LinearLayout? = null
+                val frames = mutableListOf<View>()
+                items.forEachIndexed { i, item ->
+                    if (i % 3 == 0) {
+                        row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                        grid.addView(row)
+                    }
+                    val frame = android.widget.FrameLayout(this).apply { setPadding(dp(2), dp(2), dp(2), dp(2)) }
+                    val iv = ImageView(this).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        setBackgroundColor(Color.DKGRAY)
+                    }
+                    frame.addView(iv, android.widget.FrameLayout.LayoutParams(cell, cell))
+                    if (item.isVideo) frame.addView(uiText("▶", 18f).apply { setPadding(dp(6), dp(2), 0, 0) })
+                    frame.setOnClickListener {
+                        frames.forEach { it.setBackgroundColor(Color.TRANSPARENT) }
+                        frame.setBackgroundColor(getColor(R.color.accent))
+                        shareUri = item.uri
+                        shareIsVideo = item.isVideo
+                        info.text = (if (item.isVideo) "Video" else "Foto") + " ausgewählt – wohin teilen?"
+                        actionRow.removeAllViews()
+                        listOf(
+                            "🟢 WhatsApp Status" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+                            "📸 Instagram" to listOf("com.instagram.android"),
+                            "💼 LinkedIn" to listOf("com.linkedin.android"),
+                            "📌 Pinterest" to listOf("com.pinterest"),
+                            "⋯ Mehr" to emptyList()
+                        ).forEach { (label, pkgs) -> actionRow.addView(uiChip(label) { shareTo(pkgs) }, wrapLp()) }
+                        actionRow.addView(uiChip("▶ Öffnen") {
+                            try {
+                                startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(item.uri, if (item.isVideo) "video/*" else "image/*")
+                                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                            } catch (e: ActivityNotFoundException) { toast("Keine App zum Öffnen gefunden") }
+                        }, wrapLp())
+                        actions.visibility = View.VISIBLE
+                    }
+                    frames += frame
+                    row?.addView(frame)
+                    bg.execute {
+                        val t = MediaStoreUtil.loadThumbnail(this, item.uri, item.isVideo)
+                        runOnUiThread { if (t != null) iv.setImageBitmap(t) }
+                    }
+                }
+            }
+        }
+    }
+
+    // =====================================================================
     // Eigene Einstellmenüs mit Live-Vorschau (Bauchbinde, Untertitel)
     // =====================================================================
 
@@ -1834,6 +2014,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun uiButtons(onReset: () -> Unit) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, 0) }
+        row.addView(peekChip(editorPanel), wrapLp(8))
         row.addView(uiChip("Zurücksetzen") { onReset() }, wrapLp(8))
         row.addView(uiChip("✓ Fertig") { closeEditor() }, wrapLp(0))
         editorContent.addView(row)
