@@ -120,6 +120,7 @@
                 <TextView android:id="@+id/btnFlash" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFormat" style="@style/TopChip" />
                 <TextView android:id="@+id/btnMirror" style="@style/TopChip" />
+                <TextView android:id="@+id/btnFrontAlign" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />

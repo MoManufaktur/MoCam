@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLogo: TextView
     private lateinit var btnFormat: TextView
     private lateinit var btnMirror: TextView
+    private lateinit var btnFrontAlign: TextView
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -248,6 +249,7 @@ class MainActivity : AppCompatActivity() {
         btnLogo = findViewById(R.id.btnLogo)
         btnFormat = findViewById(R.id.btnFormat)
         btnMirror = findViewById(R.id.btnMirror)
+        btnFrontAlign = findViewById(R.id.btnFrontAlign)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -342,9 +344,16 @@ class MainActivity : AppCompatActivity() {
             bindCamera()
         }
         btnLogo.setOnClickListener { openLogoPanel() }
+        btnFrontAlign.setOnClickListener {
+            settings.frontOrientation = (settings.frontOrientation + 1) % 8
+            processor.frontOrientation = settings.frontOrientation
+            toast("Ausrichtung ${settings.frontOrientation + 1}/8 – tippen, bis das Logo wie bei der Rückkamera steht")
+            updateUi()
+        }
         btnMirror.setOnClickListener {
             settings.frontMirror = !settings.frontMirror
             processor.frontMirror = settings.frontMirror
+        processor.frontOrientation = settings.frontOrientation
             toast(if (settings.frontMirror) "Frontkamera: gespiegelt (wie ein Spiegel)" else "Frontkamera: ungespiegelt (wie andere dich sehen)")
             updateUi()
         }
@@ -1296,6 +1305,8 @@ class MainActivity : AppCompatActivity() {
         btnFormat.text = "▭ " + currentFormat().label
         btnMirror.text = if (settings.frontMirror) "🪞 Spiegeln an" else "🪞 Spiegeln aus"
         btnMirror.visibility = if (lensFacing == CameraSelector.LENS_FACING_FRONT) View.VISIBLE else View.GONE
+        btnFrontAlign.text = "🧭 Ausrichtung ${settings.frontOrientation + 1}/8"
+        btnFrontAlign.visibility = btnMirror.visibility
         btnFormat.alpha = if (rec) 0.4f else 1f
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
         btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE

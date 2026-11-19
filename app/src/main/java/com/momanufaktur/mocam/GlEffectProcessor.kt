@@ -56,6 +56,11 @@ class GlEffectProcessor : SurfaceProcessor {
     @Volatile var isFront = false
     /** Frontkamera gespiegelt darstellen und aufnehmen. */
     @Volatile var frontMirror = false
+    /**
+     * Ausrichtung der Frontkamera (0..7): Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt.
+     * Die Frontkamera des Mate 20 Pro liefert ihr Bild anders als die Rückkamera – Standard 1.
+     */
+    @Volatile var frontOrientation = 1
     /** Vorzeichen der Abbildung für ungespiegelte Ausgaben – wird an der Rückkamera gelernt. */
     private var unmirroredSign = -1f
 
@@ -86,6 +91,8 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uPMin = 0
     private var uMirror = 0
     private var uWantMirror = 0
+    private var uFlipImg = 0
+    private var curFlip = false
     private var uPRange = 0
     private var logoTex = 0
 
@@ -255,8 +262,12 @@ class GlEffectProcessor : SurfaceProcessor {
         GLES20.glUniformMatrix3fv(uColor, 1, false, colorCm, 0)
         GLES20.glUniform3f(uOff, f.off[0], f.off[1], f.off[2])
 
-        val rot = ((rotationDegrees % 360) + 360) % 360
+        val baseRot = ((rotationDegrees % 360) + 360) % 360
+        val rot = if (isFront) (baseRot + (frontOrientation % 4) * 90) % 360 else baseRot
+        val flip = isFront && frontOrientation >= 4
+        curFlip = flip
         GLES20.glUniform1f(uRot, rot.toFloat())
+        GLES20.glUniform1f(uFlipImg, if (flip) 1f else 0f)
 
         // Sichtbaren Bildausschnitt dieser Ausgabe im aufrechten Koordinatensystem bestimmen.
         // Logo-Position und Spiegelung beziehen sich damit immer auf das angezeigte Bild
@@ -312,7 +323,7 @@ class GlEffectProcessor : SurfaceProcessor {
     private fun uprightAt(u: Float, v: Float, rot: Int): FloatArray {
         val sx = addMatrix[0] * u + addMatrix[4] * v + addMatrix[12]
         val sy = addMatrix[1] * u + addMatrix[5] * v + addMatrix[13]
-        val ix = 1f - sx
+        val ix = if (curFlip) sx else 1f - sx
         val iy = sy
         return when {
             rot in 46..134 -> floatArrayOf(1f - iy, ix)
@@ -376,6 +387,7 @@ class GlEffectProcessor : SurfaceProcessor {
         uPMin = GLES20.glGetUniformLocation(program, "uPMin")
         uMirror = GLES20.glGetUniformLocation(program, "uMirror")
         uWantMirror = GLES20.glGetUniformLocation(program, "uWantMirror")
+        uFlipImg = GLES20.glGetUniformLocation(program, "uFlipImg")
         uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
         val t = IntArray(1)
@@ -487,10 +499,12 @@ uniform float uMirror;
 uniform vec2 uPRange;
 uniform float uAlpha;
 uniform float uWantMirror;
+uniform float uFlipImg;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
     vec2 img = vec2(1.0 - s.x, s.y);
+    if (uFlipImg > 0.5) img.x = 1.0 - img.x;
     if (uRot > 45.0 && uRot < 135.0) return vec2(1.0 - img.y, img.x);
     if (uRot >= 135.0 && uRot < 225.0) return vec2(1.0 - img.x, 1.0 - img.y);
     if (uRot >= 225.0) return vec2(img.y, 1.0 - img.x);
@@ -503,6 +517,7 @@ vec2 toSensor(vec2 p) {
     if (uRot > 45.0 && uRot < 135.0) img = vec2(p.y, 1.0 - p.x);
     else if (uRot >= 135.0 && uRot < 225.0) img = vec2(1.0 - p.x, 1.0 - p.y);
     else if (uRot >= 225.0) img = vec2(1.0 - p.y, p.x);
+    if (uFlipImg > 0.5) img.x = 1.0 - img.x;
     return vec2(1.0 - img.x, img.y);
 }
 
