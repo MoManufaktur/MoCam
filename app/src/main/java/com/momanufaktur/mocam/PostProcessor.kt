@@ -104,7 +104,7 @@ class PostProcessor(private val ctx: Context) {
         job.outro?.let { items += EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it)))
             .setEffects(Effects(emptyList(), listOf(fit))).build() }
 
-        val composition = Composition.Builder(EditedMediaItemSequence(items))
+        val composition = Composition.Builder(EditedMediaItemSequence.Builder(items).build())
             .experimentalSetForceAudioTrack(true)
             .build()
 
