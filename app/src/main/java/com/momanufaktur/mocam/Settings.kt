@@ -72,23 +72,17 @@ class Settings(ctx: Context) {
         get() = bool("frontMirror", false)
         set(v) = p.edit().putBoolean("frontMirror", v).apply()
 
-    /** Ausrichtung der Frontkamera für Logo und Spiegelung (0..7), siehe GlEffectProcessor. */
-    var frontOrientation: Int
-        get() = int("frontOrientation", 2)
-        set(v) = p.edit().putInt("frontOrientation", v).apply()
+    /**
+     * Grundeinstellung Drehen/Spiegeln pro Kamera und Ausgabe (Vorschau, Video, Foto).
+     * 0..7: Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt.
+     */
+    fun getFix(front: Boolean, target: String): Int = int(fixKey(front, target), 0)
 
-    /** Frontkamera im Videomodus: Position (0..7) und Lage des Logos (0..7) – getrennt vom Foto. */
-    var frontOrientationVideo: Int
-        get() = int("frontOrientationVideo", 5)
-        set(v) = p.edit().putInt("frontOrientationVideo", v).apply()
+    fun setFix(front: Boolean, target: String, v: Int) {
+        p.edit().putInt(fixKey(front, target), v).apply()
+    }
 
-    var frontLogoPhoto: Int
-        get() = int("frontLogoPhoto", 0)
-        set(v) = p.edit().putInt("frontLogoPhoto", v).apply()
-
-    var frontLogoVideo: Int
-        get() = int("frontLogoVideo", 7)
-        set(v) = p.edit().putInt("frontLogoVideo", v).apply()
+    private fun fixKey(front: Boolean, target: String) = "fix_" + (if (front) "front_" else "rear_") + target
 
     /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
     var selectedLogo: String?
@@ -112,4 +106,10 @@ class Settings(ctx: Context) {
     var logoRotation: Int
         get() = int("logoRotation", 0)
         set(v) = p.edit().putInt("logoRotation", v).apply()
+
+    companion object {
+        const val TARGET_PREVIEW = "preview"
+        const val TARGET_VIDEO = "video"
+        const val TARGET_PHOTO = "photo"
+    }
 }

@@ -87,9 +87,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnExtension: TextView
     private lateinit var btnLogo: TextView
     private lateinit var btnFormat: TextView
-    private lateinit var btnMirror: TextView
-    private lateinit var btnFrontAlign: TextView
-    private lateinit var btnFrontLogo: TextView
+    private lateinit var btnSettings: TextView
+    private lateinit var settingsPanel: View
+    private lateinit var settingsContent: LinearLayout
     private lateinit var exposureRow: View
     private lateinit var exposureBar: SeekBar
     private lateinit var exposureValue: TextView
@@ -249,9 +249,9 @@ class MainActivity : AppCompatActivity() {
         btnExtension = findViewById(R.id.btnExtension)
         btnLogo = findViewById(R.id.btnLogo)
         btnFormat = findViewById(R.id.btnFormat)
-        btnMirror = findViewById(R.id.btnMirror)
-        btnFrontAlign = findViewById(R.id.btnFrontAlign)
-        btnFrontLogo = findViewById(R.id.btnFrontLogo)
+        btnSettings = findViewById(R.id.btnSettings)
+        settingsPanel = findViewById(R.id.settingsPanel)
+        settingsContent = findViewById(R.id.settingsContent)
         exposureRow = findViewById(R.id.exposureRow)
         exposureBar = findViewById(R.id.exposureBar)
         exposureValue = findViewById(R.id.exposureValue)
@@ -346,25 +346,8 @@ class MainActivity : AppCompatActivity() {
             bindCamera()
         }
         btnLogo.setOnClickListener { openLogoPanel() }
-        btnFrontAlign.setOnClickListener {
-            val v = (frontPos() + 1) % 8
-            if (videoMode) settings.frontOrientationVideo = v else settings.frontOrientation = v
-            applyFrontCalibration()
-            toast("Position ${v + 1}/8 (${if (videoMode) "Video" else "Foto"}) – tippen, bis das Logo an der richtigen Stelle steht")
-            updateUi()
-        }
-        btnFrontLogo.setOnClickListener {
-            val v = (frontLogo() + 1) % 8
-            if (videoMode) settings.frontLogoVideo = v else settings.frontLogoPhoto = v
-            applyFrontCalibration()
-            toast("Logo-Lage ${v + 1}/8: ${logoVariantName(v)}")
-            updateUi()
-        }
-        btnMirror.setOnClickListener {
-            settings.frontMirror = !settings.frontMirror
-            processor.frontMirror = settings.frontMirror
-            toast(if (settings.frontMirror) "Frontkamera: gespiegelt (wie ein Spiegel)" else "Frontkamera: ungespiegelt (wie andere dich sehen)")
-            updateUi()
+        btnSettings.setOnClickListener {
+            if (settingsPanel.visibility == View.VISIBLE) closeSettings() else openSettings()
         }
         btnFormat.setOnClickListener {
             if (recording != null) return@setOnClickListener
@@ -536,7 +519,7 @@ class MainActivity : AppCompatActivity() {
         overlay.mirrorX = false
         processor.isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
         processor.frontMirror = settings.frontMirror
-        applyFrontCalibration()
+        applyCameraFixes()
         val fmt = currentFormat()
         overlay.contentAspect = fmt.w.toFloat() / fmt.h
         applyRotation()
@@ -638,49 +621,138 @@ class MainActivity : AppCompatActivity() {
         }
         setupCameraControls(bound)
         overlay.drawLogoPreview = !effectActive
-        // Anzeige-Spiegelung der Frontkamera durch Android neutralisieren (siehe GlEffectProcessor)
-        previewView.scaleX = if (lensFacing == CameraSelector.LENS_FACING_FRONT && effectActive) -1f else 1f
         updateUi()
     }
 
-    /**
-     * Manche Android-Versionen spiegeln die Selfie-Vorschau zusätzlich in der Anzeige (PreviewView).
-     * Das wird hier erkannt und rückgängig gemacht – die Spiegelung steuert ausschließlich MoCam.
-     */
-    private fun schedulePreviewMirrorCheck() {
-        listOf(300L, 1000L, 2500L).forEach { previewView.postDelayed({ checkPreviewMirror() }, it) }
+    // =====================================================================
+    // Grundeinstellungen: Drehen/Spiegeln pro Kamera für Vorschau, Video und Foto
+    // =====================================================================
+
+    private val isFrontCam get() = lensFacing == CameraSelector.LENS_FACING_FRONT
+
+    private fun applyCameraFixes() {
+        processor.isFront = isFrontCam
+        processor.frontMirror = settings.frontMirror
+        processor.previewFix = settings.getFix(isFrontCam, Settings.TARGET_PREVIEW)
+        processor.videoFix = settings.getFix(isFrontCam, Settings.TARGET_VIDEO)
     }
 
-    private fun findTextureView(v: View): android.view.TextureView? {
-        if (v is android.view.TextureView) return v
-        if (v is android.view.ViewGroup) {
-            for (i in 0 until v.childCount) findTextureView(v.getChildAt(i))?.let { return it }
-        }
-        return null
-    }
-
-    private fun checkPreviewMirror() {
-        val tv = findTextureView(previewView) ?: return
-        val values = FloatArray(9)
-        tv.getTransform(null).getValues(values)
-        val det = values[0] * values[4] - values[1] * values[3]
-        val mirrored = det * tv.scaleX * tv.scaleY < 0f
-        previewView.scaleX = if (mirrored) -1f else 1f
-    }
-
-    // ---------- Kalibrierung Frontkamera (getrennt für Foto und Video) ----------
-
-    private fun frontPos() = if (videoMode) settings.frontOrientationVideo else settings.frontOrientation
-    private fun frontLogo() = if (videoMode) settings.frontLogoVideo else settings.frontLogoPhoto
-
-    private fun applyFrontCalibration() {
-        processor.frontOrientation = frontPos()
-        processor.frontLogoVariant = frontLogo()
-    }
-
-    private fun logoVariantName(v: Int): String {
+    private fun fixLabel(v: Int): String {
         val rot = (v % 4) * 90
-        return (if (rot == 0) "normal" else "$rot° gedreht") + if (v >= 4) ", gespiegelt" else ""
+        return "$rot°" + if (v >= 4) " · gespiegelt" else ""
+    }
+
+    private fun openSettings() {
+        if (logoPanel.visibility == View.VISIBLE) closeLogoPanel()
+        buildSettings()
+        bottomPanel.visibility = View.GONE
+        settingsPanel.visibility = View.VISIBLE
+    }
+
+    private fun closeSettings() {
+        settingsPanel.visibility = View.GONE
+        bottomPanel.visibility = View.VISIBLE
+    }
+
+    private fun buildSettings() {
+        settingsContent.removeAllViews()
+        val front = isFrontCam
+
+        fun text(t: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false) =
+            TextView(this).apply {
+                text = t
+                textSize = size
+                setTextColor(color)
+                if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }
+
+        fun chip(t: String, onClick: () -> Unit) = TextView(this).apply {
+            text = t
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setBackgroundResource(R.drawable.chip_bg)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            setOnClickListener { onClick() }
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(
+            text("⚙️ Grundeinstellungen – " + if (front) "Frontkamera" else "Rückkamera", 17f, getColor(R.color.accent), true),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        header.addView(chip("⟲ Kamera wechseln") {
+            if (recording == null) {
+                switchCamera()
+                settingsContent.postDelayed({ buildSettings() }, 300)
+            }
+        })
+        settingsContent.addView(header)
+
+        settingsContent.addView(text(
+            "1. Vorschau einstellen, bis Bild und Logo richtig stehen.\n" +
+            "2. Testvideo bzw. Testfoto machen und in der Galerie ansehen.\n" +
+            "3. „Video“ bzw. „Foto“ so einstellen, dass die Datei wie die Vorschau aussieht.",
+            12f, Color.argb(200, 255, 255, 255)
+        ).apply { setPadding(0, dp(6), 0, dp(8)) })
+
+        if (front) {
+            val sw = SwitchCompat(this).apply {
+                text = "Automatisch spiegeln (wie ein Spiegel)"
+                setTextColor(Color.WHITE)
+                isChecked = settings.frontMirror
+                setOnCheckedChangeListener { _, checked ->
+                    settings.frontMirror = checked
+                    applyCameraFixes()
+                }
+            }
+            settingsContent.addView(sw)
+        }
+
+        listOf(
+            Settings.TARGET_PREVIEW to "Vorschau",
+            Settings.TARGET_VIDEO to "Video-Aufnahme",
+            Settings.TARGET_PHOTO to "Foto"
+        ).forEach { (target, name) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            val value = text(name + "\n" + fixLabel(settings.getFix(front, target)), 13f)
+            row.addView(value, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            fun update(v: Int) {
+                settings.setFix(front, target, v)
+                applyCameraFixes()
+                value.text = name + "\n" + fixLabel(v)
+            }
+            row.addView(chip("↻ 90°") {
+                val v = settings.getFix(front, target)
+                update((v / 4) * 4 + (v % 4 + 1) % 4)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+            row.addView(chip("⇋ Spiegeln") {
+                val v = settings.getFix(front, target)
+                update((v + 4) % 8)
+            })
+            settingsContent.addView(row)
+        }
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(14), 0, 0)
+        }
+        buttons.addView(chip("Zurücksetzen") {
+            listOf(Settings.TARGET_PREVIEW, Settings.TARGET_VIDEO, Settings.TARGET_PHOTO)
+                .forEach { settings.setFix(front, it, 0) }
+            applyCameraFixes()
+            buildSettings()
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+        buttons.addView(chip("🖼 Letzte Aufnahme ansehen") { openLastMedia() },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+        buttons.addView(chip("✓ Fertig") { closeSettings() })
+        settingsContent.addView(buttons)
     }
 
     private fun tryBind(provider: ProcessCameraProvider, selector: CameraSelector, group: UseCaseGroup): Camera? =
@@ -748,7 +820,7 @@ class MainActivity : AppCompatActivity() {
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
         // PreviewView ist ggf. horizontal zurückgespiegelt -> Tippen entsprechend umrechnen
-        val px = if (previewView.scaleX < 0f) previewView.width - x else x
+        val px = x
         val point = previewView.meteringPointFactory.createPoint(px, y)
         val action = FocusMeteringAction.Builder(
             point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
@@ -888,6 +960,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onShutter() {
         if (logoPanel.visibility == View.VISIBLE) closeLogoPanel()
+        if (settingsPanel.visibility == View.VISIBLE) closeSettings()
         if (videoMode) {
             if (recording != null) stopRecording() else withTimer { startRecording() }
         } else {
@@ -924,9 +997,10 @@ class MainActivity : AppCompatActivity() {
         val ic = imageCapture ?: return
         val filter = processor.filter
         val logo = if (settings.logoEnabled && settings.logoOnPhotos) logoBitmap else null
-        // Spiegelung macht MoCam selbst (CameraX kippt sie auf diesem Gerät um 90°)
-        val mirror = lensFacing == CameraSelector.LENS_FACING_FRONT && settings.frontMirror
-        val needsProcessing = !filter.isIdentity || logo != null || mirror
+        // Drehen/Spiegeln macht MoCam selbst am fertigen Foto (Grundeinstellung + Frontkamera-Spiegel)
+        val mirror = isFrontCam && settings.frontMirror
+        val photoFix = settings.getFix(isFrontCam, Settings.TARGET_PHOTO)
+        val needsProcessing = !filter.isIdentity || logo != null || mirror || photoFix != 0
         val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
 
         flashScreen()
@@ -957,7 +1031,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     bg.execute {
                         val uri = try {
-                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a, mirror)
+                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a, mirror, photoFix)
                         } catch (t: Throwable) {
                             Log.e(TAG, "Fotoverarbeitung", t)
                             null
@@ -1329,13 +1403,7 @@ class MainActivity : AppCompatActivity() {
         btnExtension.text = "✨ " + extensionName(extensionMode)
         btnLogo.text = "🏷 Logo"
         btnFormat.text = "▭ " + currentFormat().label
-        btnMirror.text = if (settings.frontMirror) "🪞 Spiegeln an" else "🪞 Spiegeln aus"
-        btnMirror.visibility = if (lensFacing == CameraSelector.LENS_FACING_FRONT) View.VISIBLE else View.GONE
-        btnFrontAlign.text = "🧭 Position ${frontPos() + 1}/8"
-        btnFrontAlign.visibility = btnMirror.visibility
-        btnFrontLogo.text = "🔄 Logo ${frontLogo() + 1}/8"
-        btnFrontLogo.visibility = btnMirror.visibility
-        btnFormat.alpha = if (rec) 0.4f else 1f
+        btnSettings.text = "⚙️"
         btnPrompter.text = if (prompterActive()) "📜 Prompter an" else "📜 Prompter"
         btnPrompter.visibility = if (videoMode) View.VISIBLE else View.GONE
 

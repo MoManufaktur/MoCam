@@ -54,7 +54,8 @@ object MediaStoreUtil {
         filter: Filter,
         logo: Bitmap?,
         cx: Float, cy: Float, w: Float, alpha: Float,
-        mirror: Boolean = false
+        mirror: Boolean = false,
+        fix: Int = 0
     ): Uri? {
         val decoded = BitmapFactory.decodeFile(src.path) ?: return null
 
@@ -71,7 +72,9 @@ object MediaStoreUtil {
             ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
             ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(270f); m.postScale(-1f, 1f) }
         }
-        // Spiegeln (Frontkamera): links/rechts tauschen – am bereits aufrecht gedrehten Bild
+        // Grundeinstellung (Drehen/Spiegeln) und Frontkamera-Spiegel – am aufrecht gedrehten Bild
+        if (fix >= 4) m.postScale(-1f, 1f)
+        if (fix % 4 != 0) m.postRotate((fix % 4) * 90f)
         if (mirror) m.postScale(-1f, 1f)
         val bounds = RectF(0f, 0f, decoded.width.toFloat(), decoded.height.toFloat())
         m.mapRect(bounds)

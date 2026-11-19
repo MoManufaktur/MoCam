@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import androidx.camera.core.CameraEffect
 import androidx.camera.core.SurfaceOutput
 import androidx.camera.core.SurfaceProcessor
 import androidx.camera.core.SurfaceRequest
@@ -52,19 +53,16 @@ class GlEffectProcessor : SurfaceProcessor {
     @Volatile var logoAlpha = 1f
     /** Drehung Sensor -> aufrechtes Bild (meist 90 hinten, 270 vorne). */
     @Volatile var rotationDegrees = 90
-    /** Frontkamera aktiv (Vorschau ist dann gespiegelt). */
+    /** Frontkamera aktiv. */
     @Volatile var isFront = false
-    /** Frontkamera gespiegelt darstellen und aufnehmen. */
+    /** Frontkamera spiegeln (links/rechts, wie ein Spiegel) – Vorschau und Aufnahme. */
     @Volatile var frontMirror = false
     /**
-     * Ausrichtung der Frontkamera (0..7): Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt.
-     * Mate 20 Pro: Wert 2 (Anzeige „3/8“) auf dem Gerät bestätigt.
+     * Grundeinstellungen der aktuellen Kamera: Korrektur für Vorschau bzw. Video-Aufnahme.
+     * 0..7: Drehung = (Wert % 4) * 90°, ab 4 zusätzlich gespiegelt. Wirkt auf Bild UND Logo.
      */
-    @Volatile var frontOrientation = 2
-    /** Lage des Logos selbst bei der Frontkamera (0..7): Drehung = (Wert % 4) * 90°, ab 4 gespiegelt. */
-    @Volatile var frontLogoVariant = 0
-    /** Vorzeichen der Abbildung für ungespiegelte Ausgaben – wird an der Rückkamera gelernt. */
-    private var unmirroredSign = -1f
+    @Volatile var previewFix = 0
+    @Volatile var videoFix = 0
 
     @Volatile private var logoAspect = 1f // Höhe / Breite
     @Volatile private var hasLogo = false
@@ -91,13 +89,8 @@ class GlEffectProcessor : SurfaceProcessor {
     private var uRect = 0
     private var uAlpha = 0
     private var uPMin = 0
-    private var uMirror = 0
+    private var uFix = 0
     private var uWantMirror = 0
-    private var uFlipImg = 0
-    private var uLogoRot = 0
-    private var uDispFlip = 0
-    private var uLogoFlip = 0
-    private var curFlip = false
     private var uPRange = 0
     private var logoTex = 0
 
@@ -267,16 +260,11 @@ class GlEffectProcessor : SurfaceProcessor {
         GLES20.glUniformMatrix3fv(uColor, 1, false, colorCm, 0)
         GLES20.glUniform3f(uOff, f.off[0], f.off[1], f.off[2])
 
-        val baseRot = ((rotationDegrees % 360) + 360) % 360
-        val rot = if (isFront) (baseRot + (frontOrientation % 4) * 90) % 360 else baseRot
-        val flip = isFront && frontOrientation >= 4
-        curFlip = flip
+        val rot = ((rotationDegrees % 360) + 360) % 360
         GLES20.glUniform1f(uRot, rot.toFloat())
-        GLES20.glUniform1f(uFlipImg, if (flip) 1f else 0f)
 
-        // Sichtbaren Bildausschnitt dieser Ausgabe im aufrechten Koordinatensystem bestimmen.
-        // Logo-Position und Spiegelung beziehen sich damit immer auf das angezeigte Bild
-        // im gewählten Format (9:16, 1:1 …).
+        // Sichtbaren Bildausschnitt dieser Ausgabe im aufrechten Koordinatensystem bestimmen
+        // (bezieht sich immer auf das gewählte Format 9:16, 1:1 …).
         val p00 = uprightAt(0f, 0f, rot)
         val p10 = uprightAt(1f, 0f, rot)
         val p01 = uprightAt(0f, 1f, rot)
@@ -286,37 +274,29 @@ class GlEffectProcessor : SurfaceProcessor {
         val maxX = maxOf(maxOf(p00[0], p10[0]), maxOf(p01[0], p11x))
         val minY = minOf(minOf(p00[1], p10[1]), minOf(p01[1], p11y))
         val maxY = maxOf(maxOf(p00[1], p10[1]), maxOf(p01[1], p11y))
+        val rangeX = (maxX - minX).coerceAtLeast(1e-4f)
+        val rangeY = (maxY - minY).coerceAtLeast(1e-4f)
         GLES20.glUniform2f(uPMin, minX, minY)
-        GLES20.glUniform2f(uPRange, (maxX - minX).coerceAtLeast(1e-4f), (maxY - minY).coerceAtLeast(1e-4f))
+        GLES20.glUniform2f(uPRange, rangeX, rangeY)
 
-        // Spiegelt CameraX diese Ausgabe schon (Selfie-Vorschau)? Erkennung über das Vorzeichen
-        // der Abbildung, Referenz wird an der (nie gespiegelten) Rückkamera gelernt.
-        val det = (p10[0] - p00[0]) * (p01[1] - p00[1]) - (p10[1] - p00[1]) * (p01[0] - p00[0])
-        val sign = if (det >= 0f) 1f else -1f
-        if (!isFront) unmirroredSign = sign
-        val mirroredByCamera = isFront && sign != unmirroredSign
-        GLES20.glUniform1f(uMirror, if (mirroredByCamera) 1f else 0f)
-        // Frontkamera: Android spiegelt die Vorschau-Anzeige zusätzlich. MoCam spiegelt das fertige
-        // Bild deshalb einmal selbst (für die Aufnahme) und die Anzeige wird in der App zurückgespiegelt.
-        GLES20.glUniform1f(uDispFlip, if (isFront) 1f else 0f)
-        // Gewünschte Darstellung: Frontkamera nur gespiegelt, wenn eingestellt – in Vorschau UND Video
+        // Grundeinstellung für diese Ausgabe (Vorschau oder Video-Aufnahme)
+        val isVideo = (out.targets and CameraEffect.VIDEO_CAPTURE) != 0
+        val fix = if (isVideo) videoFix else previewFix
+        GLES20.glUniform1f(uFix, fix.toFloat())
         GLES20.glUniform1f(uWantMirror, if (isFront && frontMirror) 1f else 0f)
 
         val show = logoEnabled && hasLogo
         GLES20.glUniform1f(uHasLogo, if (show) 1f else 0f)
         if (show) {
-            // Seitenverhältnis in echten Pixeln dieser Ausgabe
-            val uAlongX = abs(p10[0] - p00[0]) >= abs(p10[1] - p00[1])
+            // Seitenverhältnis in echten Pixeln der Ausgabe, im korrigierten (angezeigten) Bild
+            val d00 = dih((p00[0] - minX) / rangeX, (p00[1] - minY) / rangeY, fix)
+            val d10 = dih((p10[0] - minX) / rangeX, (p10[1] - minY) / rangeY, fix)
+            val uAlongX = abs(d10[0] - d00[0]) >= abs(d10[1] - d00[1])
             val upW = if (uAlongX) out.size.width else out.size.height
             val upH = if (uAlongX) out.size.height else out.size.width
             val upright = upW.toFloat() / upH.toFloat()
-            val lv = if (isFront) frontLogoVariant else 0
-            val lRot = lv % 4
-            GLES20.glUniform1f(uLogoRot, lRot.toFloat())
-            GLES20.glUniform1f(uLogoFlip, if (lv >= 4) 1f else 0f)
-            val shownAspect = if (lRot % 2 == 1) 1f / logoAspect else logoAspect
             val w = logoW
-            val h = w * shownAspect * upright
+            val h = w * logoAspect * upright
             GLES20.glUniform4f(uRect, logoCx - w / 2f, logoCy - h / 2f, w, h)
             GLES20.glUniform1f(uAlpha, logoAlpha)
         }
@@ -336,7 +316,7 @@ class GlEffectProcessor : SurfaceProcessor {
     private fun uprightAt(u: Float, v: Float, rot: Int): FloatArray {
         val sx = addMatrix[0] * u + addMatrix[4] * v + addMatrix[12]
         val sy = addMatrix[1] * u + addMatrix[5] * v + addMatrix[13]
-        val ix = if (curFlip) sx else 1f - sx
+        val ix = 1f - sx
         val iy = sy
         return when {
             rot in 46..134 -> floatArrayOf(1f - iy, ix)
@@ -344,6 +324,14 @@ class GlEffectProcessor : SurfaceProcessor {
             rot >= 225 -> floatArrayOf(iy, 1f - ix)
             else -> floatArrayOf(ix, iy)
         }
+    }
+
+    /** Drehen/Spiegeln im Einheitsquadrat – identisch zur Shader-Funktion dih(). */
+    private fun dih(x: Float, y: Float, k: Int): FloatArray {
+        var a = if (k >= 4) 1f - x else x
+        var b = y
+        repeat(k % 4) { val t = a; a = 1f - b; b = t }
+        return floatArrayOf(a, b)
     }
 
     // ------------------------------------------------------------------
@@ -398,12 +386,8 @@ class GlEffectProcessor : SurfaceProcessor {
         uRect = GLES20.glGetUniformLocation(program, "uRect")
         uAlpha = GLES20.glGetUniformLocation(program, "uAlpha")
         uPMin = GLES20.glGetUniformLocation(program, "uPMin")
-        uMirror = GLES20.glGetUniformLocation(program, "uMirror")
+        uFix = GLES20.glGetUniformLocation(program, "uFix")
         uWantMirror = GLES20.glGetUniformLocation(program, "uWantMirror")
-        uFlipImg = GLES20.glGetUniformLocation(program, "uFlipImg")
-        uLogoRot = GLES20.glGetUniformLocation(program, "uLogoRot")
-        uDispFlip = GLES20.glGetUniformLocation(program, "uDispFlip")
-        uLogoFlip = GLES20.glGetUniformLocation(program, "uLogoFlip")
         uPRange = GLES20.glGetUniformLocation(program, "uPRange")
 
         val t = IntArray(1)
@@ -511,19 +495,14 @@ uniform float uHasLogo;
 uniform float uRot;
 uniform vec4 uRect;
 uniform vec2 uPMin;
-uniform float uMirror;
 uniform vec2 uPRange;
 uniform float uAlpha;
+uniform float uFix;
 uniform float uWantMirror;
-uniform float uFlipImg;
-uniform float uLogoRot;
-uniform float uDispFlip;
-uniform float uLogoFlip;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
     vec2 img = vec2(1.0 - s.x, s.y);
-    if (uFlipImg > 0.5) img.x = 1.0 - img.x;
     if (uRot > 45.0 && uRot < 135.0) return vec2(1.0 - img.y, img.x);
     if (uRot >= 135.0 && uRot < 225.0) return vec2(1.0 - img.x, 1.0 - img.y);
     if (uRot >= 225.0) return vec2(img.y, 1.0 - img.x);
@@ -536,18 +515,25 @@ vec2 toSensor(vec2 p) {
     if (uRot > 45.0 && uRot < 135.0) img = vec2(p.y, 1.0 - p.x);
     else if (uRot >= 135.0 && uRot < 225.0) img = vec2(1.0 - p.x, 1.0 - p.y);
     else if (uRot >= 225.0) img = vec2(1.0 - p.y, p.x);
-    if (uFlipImg > 0.5) img.x = 1.0 - img.x;
     return vec2(1.0 - img.x, img.y);
 }
 
-void main() {
-    // Position im angezeigten Bild dieser Ausgabe (0..1, oben links)
-    vec2 q = (toUpright(vS) - uPMin) / uPRange;
-    vec2 d = q;
-    if (uMirror > 0.5) d.x = 1.0 - d.x;
-    if (uDispFlip > 0.5) d.x = 1.0 - d.x;
+// Drehen (k % 4) * 90° und ab k >= 4 spiegeln – Grundeinstellung pro Ausgabe
+vec2 dih(vec2 a, float k) {
+    if (k > 3.5) a.x = 1.0 - a.x;
+    float r = mod(k, 4.0);
+    if (r > 0.5) a = vec2(1.0 - a.y, a.x);
+    if (r > 1.5) a = vec2(1.0 - a.y, a.x);
+    if (r > 2.5) a = vec2(1.0 - a.y, a.x);
+    return a;
+}
 
-    // Kamerabild so abtasten, dass es wie gewünscht (gespiegelt oder nicht) erscheint
+void main() {
+    // Position dieses Bildpunkts im angezeigten Bild (0..1, oben links), nach Grundeinstellung
+    vec2 q = (toUpright(vS) - uPMin) / uPRange;
+    vec2 d = dih(q, uFix);
+
+    // Kamerabild im angezeigten Bild abtasten – optional links/rechts gespiegelt
     vec2 qs = d;
     if (uWantMirror > 0.5) qs.x = 1.0 - qs.x;
     vec2 sCam = toSensor(uPMin + qs * uPRange);
@@ -558,13 +544,7 @@ void main() {
     if (uHasLogo > 0.5) {
         vec2 luv = (d - uRect.xy) / uRect.zw;
         if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
-            // Lage des Logos (Frontkamera-Korrektur): spiegeln, dann in 90°-Schritten drehen
-            vec2 t = luv;
-            if (uLogoFlip > 0.5) t.x = 1.0 - t.x;
-            if (uLogoRot > 0.5 && uLogoRot < 1.5) t = vec2(t.y, 1.0 - t.x);
-            else if (uLogoRot > 1.5 && uLogoRot < 2.5) t = vec2(1.0 - t.x, 1.0 - t.y);
-            else if (uLogoRot > 2.5) t = vec2(1.0 - t.y, t.x);
-            vec4 l = texture2D(uLogo, t);
+            vec4 l = texture2D(uLogo, luv);
             float a = l.a * uAlpha;
             c = c * (1.0 - a) + l.rgb * uAlpha;
         }

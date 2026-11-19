@@ -117,11 +117,9 @@
                 android:paddingStart="8dp"
                 android:paddingEnd="8dp">
 
+                <TextView android:id="@+id/btnSettings" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFlash" style="@style/TopChip" />
                 <TextView android:id="@+id/btnFormat" style="@style/TopChip" />
-                <TextView android:id="@+id/btnMirror" style="@style/TopChip" />
-                <TextView android:id="@+id/btnFrontAlign" style="@style/TopChip" />
-                <TextView android:id="@+id/btnFrontLogo" style="@style/TopChip" />
                 <TextView android:id="@+id/btnTimer" style="@style/TopChip" />
                 <TextView android:id="@+id/btnGrid" style="@style/TopChip" />
                 <TextView android:id="@+id/btnQuality" style="@style/TopChip" />
@@ -449,4 +447,21 @@
                 android:text="Fertig" />
         </LinearLayout>
     </LinearLayout>
+    <!-- Grundeinstellungen -->
+    <ScrollView
+        android:id="@+id/settingsPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#E6111111"
+        android:fillViewport="false"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/settingsContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp" />
+    </ScrollView>
 </FrameLayout>
