@@ -84,6 +84,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLimit: TextView
     private lateinit var btnLower: TextView
     private lateinit var btnTimelapse: TextView
+    private lateinit var btnFps: TextView
+    private lateinit var btnBitrate: TextView
+    private lateinit var btnVoice: TextView
+    private lateinit var statusText: TextView
+    private lateinit var voice: VoiceTrigger
     private lateinit var processingText: TextView
     private lateinit var post: PostProcessor
     private var recordingFolder = ""
@@ -221,6 +226,12 @@ class MainActivity : AppCompatActivity() {
         settings = Settings(this)
         processor = GlEffectProcessor(fxState, burnLogo = false)
         videoProcessor = GlEffectProcessor(fxState, burnLogo = true)
+        voice = VoiceTrigger(this) { word ->
+            if (recording == null && countdown == null) {
+                toast("🗣 „$word“")
+                onShutter()
+            }
+        }
         post = PostProcessor(this).apply {
             onStatus = { msg ->
                 processingText.text = msg ?: ""
@@ -265,6 +276,13 @@ class MainActivity : AppCompatActivity() {
         countdownText.visibility = View.GONE
         prompterView.playing = false
         recording?.stop()
+        voice.stop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (settings.voiceTrigger && recording == null) startVoice()
+        statusTicker.run()
     }
 
     override fun onDestroy() {
@@ -272,13 +290,23 @@ class MainActivity : AppCompatActivity() {
         recording?.close()
         cameraProvider?.unbindAll()
         processor.release()
+        voice.release()
+        statusText.removeCallbacks(statusTicker)
         videoProcessor.release()
         sound.release()
         bg.shutdown()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+        // Lautstärketasten und Bluetooth-Fernauslöser (#16): die meisten senden Lautstärke, Enter oder Medientasten
+        val shutterKeys = setOf(
+            KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_CAMERA,
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_SPACE
+        )
+        val editing = currentFocus is EditText
+        if (keyCode in shutterKeys && !(editing && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN && keyCode != KeyEvent.KEYCODE_VOLUME_UP)) {
             if (event.repeatCount == 0) onShutter()
             return true
         }
@@ -302,6 +330,10 @@ class MainActivity : AppCompatActivity() {
         btnLimit = findViewById(R.id.btnLimit)
         btnLower = findViewById(R.id.btnLower)
         btnTimelapse = findViewById(R.id.btnTimelapse)
+        btnFps = findViewById(R.id.btnFps)
+        btnBitrate = findViewById(R.id.btnBitrate)
+        btnVoice = findViewById(R.id.btnVoice)
+        statusText = findViewById(R.id.statusText)
         processingText = findViewById(R.id.processingText)
         audioLevel = findViewById(R.id.audioLevel)
         shareBar = findViewById(R.id.shareBar)
@@ -390,6 +422,30 @@ class MainActivity : AppCompatActivity() {
             if (settings.timelapse > 0) {
                 toast("Zeitraffer ${settings.timelapse}x – 1 Minute wird zu ${60 / settings.timelapse.coerceAtLeast(1)} s (ohne Ton)")
             }
+            updateUi()
+        }
+        btnFps.setOnClickListener {
+            if (recording != null) return@setOnClickListener
+            settings.fps = when (settings.fps) { 0 -> 24; 24 -> 25; 25 -> 30; 30 -> 60; else -> 0 }
+            updateUi()
+            bindCamera()
+        }
+        btnBitrate.setOnClickListener {
+            if (recording != null) return@setOnClickListener
+            settings.bitrateMbps = when (settings.bitrateMbps) { 0 -> 8; 8 -> 16; 16 -> 24; 24 -> 40; 40 -> 60; else -> 0 }
+            updateUi()
+            bindCamera()
+        }
+        btnVoice.setOnClickListener {
+            settings.voiceTrigger = !settings.voiceTrigger
+            if (settings.voiceTrigger) {
+                if (!startVoice()) {
+                    settings.voiceTrigger = false
+                    toast("Bitte zuerst ein Sprachmodell laden (⚙️ → Untertitel einstellen)")
+                } else {
+                    toast("Sprachauslöser an: „Foto“ oder „Aufnahme“ sagen")
+                }
+            } else voice.stop()
             updateUi()
         }
         btnLower.setOnClickListener {
@@ -688,14 +744,19 @@ class MainActivity : AppCompatActivity() {
 
         var bound: Camera? = null
         if (videoMode) {
-            val vc = runningVc ?: run {
+            fun makeVc(withFps: Boolean): VideoCapture<Recorder> {
                 val q = qualities[settings.qualityIndex.coerceIn(0, qualities.size - 1)].first
-                val recorder = Recorder.Builder()
+                val rb = Recorder.Builder()
                     .setQualitySelector(QualitySelector.from(q, FallbackStrategy.lowerQualityOrHigherThan(q)))
                     .setAspectRatio(if (fmt.wide) AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3)
-                    .build()
-                VideoCapture.withOutput(recorder)
+                // #10 Bitrate
+                if (settings.bitrateMbps > 0) rb.setTargetVideoEncodingBitRate(settings.bitrateMbps * 1_000_000)
+                val vb = VideoCapture.Builder(rb.build())
+                // #9 Bildrate
+                if (withFps && settings.fps > 0) vb.setTargetFrameRate(android.util.Range(settings.fps, settings.fps))
+                return vb.build()
             }
+            var vc = runningVc ?: makeVc(true)
             videoCapture = vc
             // Getrennte Wege: Vorschau nur mit Filter, Aufnahme mit Filter + Logo
             fun splitGroup(withViewPort: Boolean): UseCaseGroup {
@@ -716,6 +777,13 @@ class MainActivity : AppCompatActivity() {
                 ?: tryBind(provider, base, splitGroup(false))
                 ?: tryBind(provider, base, videoOnlyGroup(true))
                 ?: tryBind(provider, base, videoOnlyGroup(false))
+            if (bound == null && runningVc == null && settings.fps > 0) {
+                // Bildrate nicht unterstützt -> ohne feste Bildrate erneut versuchen
+                toast("${settings.fps} fps wird von dieser Kamera nicht unterstützt – automatisch")
+                vc = makeVc(false)
+                videoCapture = vc
+                bound = tryBind(provider, base, splitGroup(true)) ?: tryBind(provider, base, splitGroup(false))
+            }
             effectActive = bound != null
             if (bound == null) {
                 toast("Filter/Logo-Effekt wird von diesem Gerät nicht unterstützt.")
@@ -954,6 +1022,28 @@ class MainActivity : AppCompatActivity() {
         viewRow.addView(scrollChip, wrapLp())
         viewRow.addView(wrapChip, wrapLp())
         settingsContent.addView(viewRow)
+
+        // ---------- #15 Copyright ----------
+        settingsContent.addView(text("©️ Copyright in Fotos", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        settingsContent.addView(SwitchCompat(this).apply {
+            text = "Autor und Copyright in jedes Foto schreiben"
+            setTextColor(Color.WHITE)
+            isChecked = settings.copyrightEnabled
+            setOnCheckedChangeListener { _, c -> settings.copyrightEnabled = c }
+        })
+        fun cField(hintText: String, value: String, onChange: (String) -> Unit) = EditText(this).apply {
+            setText(value); hint = hintText; setSingleLine()
+            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun afterTextChanged(e: android.text.Editable?) { onChange(e?.toString() ?: "") }
+            })
+        }
+        settingsContent.addView(cField("Autor", settings.copyrightAuthor) { settings.copyrightAuthor = it })
+        settingsContent.addView(cField("Copyright", settings.copyrightText) { settings.copyrightText = it })
+        settingsContent.addView(text("Gilt für Fotos (EXIF). Videos speichert Android ohne Autor-Feld.",
+            11f, Color.argb(170, 255, 255, 255)))
 
         // ---------- #10 Intro & Outro ----------
         settingsContent.addView(text("🎬 Intro & Outro", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
@@ -1304,6 +1394,7 @@ class MainActivity : AppCompatActivity() {
         val vc = videoCapture ?: return
         MediaStoreUtil.subFolder = currentFolder()
         recordingFolder = MediaStoreUtil.subFolder
+        voice.stop() // Mikrofon für die Aufnahme freigeben
         if (settings.audio && settings.micMode == "bluetooth") startBluetoothMic()
         val opts = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(MediaStoreUtil.videoValues(MediaStoreUtil.fileName("MoCam")))
@@ -1354,6 +1445,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 is VideoRecordEvent.Finalize -> {
+                    if (settings.voiceTrigger) startVoice()
                     sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
                     recording = null
                     fxState.timelapseActive = false
@@ -1755,6 +1847,12 @@ class MainActivity : AppCompatActivity() {
     private fun setLastMedia(uri: Uri, isVideo: Boolean) {
         lastMediaUri = uri
         lastMediaIsVideo = isVideo
+        if (!isVideo && settings.copyrightEnabled) {
+            val a = settings.copyrightAuthor
+            val c = settings.copyrightText
+            bg.execute { MediaStoreUtil.writeCopyright(this, uri, a, c) }
+        }
+        updateStatus()
         showShareBar(uri, isVideo)
         bg.execute {
             val thumb = MediaStoreUtil.loadThumbnail(this, uri, isVideo)
@@ -2226,6 +2324,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // #16 Sprachauslöser, #17 Restaufnahmezeit / Akku
+    // =====================================================================
+
+    private fun startVoice(): Boolean {
+        if (!granted(Manifest.permission.RECORD_AUDIO)) return false
+        return voice.start()
+    }
+
+    private val statusTicker = object : Runnable {
+        override fun run() {
+            updateStatus()
+            statusText.postDelayed(this, 15000)
+        }
+    }
+
+    /** Freier Speicher in Aufnahmezeit (Video) bzw. Fotoanzahl, dazu Akkustand. */
+    private fun updateStatus() {
+        if (!::statusText.isInitialized) return
+        val free = try {
+            android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path).availableBytes
+        } catch (e: Exception) { 0L }
+        val battery = (getSystemService(BATTERY_SERVICE) as android.os.BatteryManager)
+            .getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val space = if (videoMode) {
+            val mbps = when {
+                settings.bitrateMbps > 0 -> settings.bitrateMbps.toDouble()
+                else -> when (settings.qualityIndex) { 0 -> 45.0; 1 -> 17.0; 2 -> 9.0; else -> 4.0 }
+            } + 0.2
+            val minutes = (free * 8 / (mbps * 1_000_000) / 60).toLong()
+            val factor = if (settings.timelapse > 1) settings.timelapse else 1
+            val real = minutes * factor
+            "💾 ≈ " + (if (real >= 60) "${real / 60} h ${real % 60} min" else "$real min") +
+                (if (factor > 1) " (Zeitraffer)" else "")
+        } else {
+            "💾 ≈ ${String.format("%,d", free / (4L * 1024 * 1024)).replace(',', '.')} Fotos"
+        }
+        statusText.text = "$space · 🔋 $battery %"
+    }
+
+    // =====================================================================
     // #6 Bauchbinde
     // =====================================================================
 
@@ -2466,6 +2604,12 @@ class MainActivity : AppCompatActivity() {
         btnTimer.text = if (settings.timer == 0) "⏱ Timer aus" else "⏱ ${settings.timer}s"
         btnLimit.text = if (settings.timeLimit == 0) "⏳ Limit aus" else "⏳ ${settings.timeLimit}s"
         btnLimit.visibility = if (videoMode) View.VISIBLE else View.GONE
+        btnFps.text = if (settings.fps == 0) "🎞 fps auto" else "🎞 ${settings.fps} fps"
+        btnFps.visibility = if (videoMode) View.VISIBLE else View.GONE
+        btnBitrate.text = if (settings.bitrateMbps == 0) "📶 Bitrate auto" else "📶 ${settings.bitrateMbps} Mbit/s"
+        btnBitrate.visibility = if (videoMode) View.VISIBLE else View.GONE
+        btnVoice.text = if (settings.voiceTrigger) "🗣 Sprache an" else "🗣 Sprache aus"
+        updateStatus()
         btnLower.text = if (settings.lowerEnabled) "🪪 Bauchbinde an" else "🪪 Bauchbinde aus"
         btnLower.visibility = if (videoMode) View.VISIBLE else View.GONE
         btnTimelapse.text = if (settings.timelapse == 0) "⏩ Zeitraffer aus" else "⏩ Zeitraffer ${settings.timelapse}x"

@@ -136,6 +136,21 @@ object MediaStoreUtil {
         }
     }
 
+    /** #15 Autor und Copyright in die EXIF-Daten eines gespeicherten Fotos schreiben. */
+    fun writeCopyright(ctx: Context, uri: Uri, author: String, copyright: String) {
+        try {
+            ctx.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                val exif = ExifInterface(pfd.fileDescriptor)
+                if (author.isNotBlank()) exif.setAttribute(ExifInterface.TAG_ARTIST, author)
+                if (copyright.isNotBlank()) exif.setAttribute(ExifInterface.TAG_COPYRIGHT, copyright)
+                exif.setAttribute(ExifInterface.TAG_SOFTWARE, "MoCam")
+                exif.saveAttributes()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MoCam", "EXIF-Copyright", e)
+        }
+    }
+
     fun loadThumbnail(ctx: Context, uri: Uri, isVideo: Boolean): Bitmap? = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ctx.contentResolver.loadThumbnail(uri, Size(256, 256), null)

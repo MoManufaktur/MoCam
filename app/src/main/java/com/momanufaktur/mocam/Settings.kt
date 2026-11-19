@@ -243,6 +243,33 @@ class Settings(ctx: Context) {
         get() = p.getString("sub_lang", "de") ?: "de"
         set(v) = p.edit().putString("sub_lang", v).apply()
 
+    /** #9 Bildrate (0 = automatisch) und #10 Bitrate in Mbit/s (0 = automatisch). */
+    var fps: Int
+        get() = int("fps", 0)
+        set(v) = p.edit().putInt("fps", v).apply()
+
+    var bitrateMbps: Int
+        get() = int("bitrate", 0)
+        set(v) = p.edit().putInt("bitrate", v).apply()
+
+    /** #15 Copyright/Autor in den Foto-Metadaten. */
+    var copyrightEnabled: Boolean
+        get() = bool("copyrightOn", true)
+        set(v) = p.edit().putBoolean("copyrightOn", v).apply()
+
+    var copyrightAuthor: String
+        get() = p.getString("copyrightAuthor", "Kai") ?: ""
+        set(v) = p.edit().putString("copyrightAuthor", v).apply()
+
+    var copyrightText: String
+        get() = p.getString("copyrightText", "© MoManufaktur") ?: ""
+        set(v) = p.edit().putString("copyrightText", v).apply()
+
+    /** #16 Sprachauslöser */
+    var voiceTrigger: Boolean
+        get() = bool("voiceTrigger", false)
+        set(v) = p.edit().putBoolean("voiceTrigger", v).apply()
+
     companion object {
         const val TARGET_PREVIEW = "preview"
         const val TARGET_VIDEO = "video"
