@@ -231,6 +231,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
+        if (savedInstanceState == null) maybeShowDonateHint()
 
         mainExec = ContextCompat.getMainExecutor(this)
         settings = Settings(this)
@@ -2420,6 +2421,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =====================================================================
+    // Spenden-Hinweis: zufällig bei jedem 5. bis 10. App-Start
+    // =====================================================================
+
+    private fun maybeShowDonateHint() {
+        val prefs = getSharedPreferences("mocam_donate", MODE_PRIVATE)
+        val opens = prefs.getInt("opens", 0) + 1
+        var target = prefs.getInt("target", 0)
+        if (target == 0) target = kotlin.random.Random.nextInt(5, 11)
+        if (opens < target) {
+            prefs.edit().putInt("opens", opens).putInt("target", target).apply()
+            return
+        }
+        prefs.edit().putInt("opens", 0).putInt("target", kotlin.random.Random.nextInt(5, 11)).apply()
+        window.decorView.postDelayed({ if (!isFinishing) showDonateDialog() }, 1200)
+    }
+
+    private fun openUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            toast("Kein Browser gefunden")
+        }
+    }
+
+    private fun showDonateDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("💛 MoCam ist Open Source")
+            .setMessage(
+                "MoCam ist kostenlos, ohne Werbung und ohne Tracking. Der komplette Quellcode " +
+                    "liegt offen auf GitHub.\n\nDas Projekt lebt von Spenden – jeder kleine Betrag " +
+                    "hilft, neue Funktionen zu entwickeln und die App zu pflegen. Danke!"
+            )
+            .setPositiveButton("Spenden") { _, _ -> openUrl(DONATE_URL) }
+            .setNeutralButton("GitHub") { _, _ -> openUrl(GITHUB_URL) }
+            .setNegativeButton("Später", null)
+            .show()
+    }
+
+    // =====================================================================
     // #13 Serienbild / Intervall, #14 Belichtungsreihe
     // =====================================================================
 
@@ -3110,6 +3150,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val DONATE_URL = "https://www.paypal.com/donate/?hosted_button_id=PFE8KWFRX3F7S"
+        const val GITHUB_URL = "https://github.com/MoManufaktur/MoCam"
         private const val TAG = "MoCam"
         private const val FLASH_OFF = 0
         private const val FLASH_ON = 1
