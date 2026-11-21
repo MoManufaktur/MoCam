@@ -2442,6 +2442,13 @@ class MainActivity : AppCompatActivity() {
     private fun maybeShowDonateHint() {
         val prefs = getSharedPreferences("mocam_donate", MODE_PRIVATE)
         if (prefs.getBoolean("disabled", false)) return
+        // Allererster Start: Popup einmal sofort zeigen, danach beginnt der Zufallszähler
+        if (!prefs.getBoolean("firstShown", false)) {
+            prefs.edit().putBoolean("firstShown", true).putInt("opens", 0)
+                .putInt("target", kotlin.random.Random.nextInt(5, 11)).apply()
+            window.decorView.postDelayed({ if (!isFinishing) showDonateDialog() }, 1500)
+            return
+        }
         val opens = prefs.getInt("opens", 0) + 1
         var target = prefs.getInt("target", 0)
         if (target == 0) target = kotlin.random.Random.nextInt(5, 11)
