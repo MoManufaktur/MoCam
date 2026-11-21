@@ -11,8 +11,16 @@ android {
         applicationId = "com.momanufaktur.mocam"
         minSdk = 26          // Mate 20 Pro: Android 9/10 (EMUI 9/10/12)
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Build-Nummer kommt aus GitHub Actions (fortlaufend), lokal 1
+        val build = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        val sha = (System.getenv("GITHUB_SHA") ?: "lokal").take(7)
+        versionCode = build
+        versionName = "1.1.$build"
+        buildConfigField("String", "COMMIT", "\"$sha\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // Fester Schlüssel im Projekt, damit spätere Builds als Update installiert werden können

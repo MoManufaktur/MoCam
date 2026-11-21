@@ -1181,6 +1181,13 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
         buttons.addView(chip("✓ Fertig") { closeSettings() })
         settingsContent.addView(buttons)
+
+        // Versionsnummer ganz unten
+        settingsContent.addView(text("MoCam Version ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE} · ${BuildConfig.COMMIT})",
+            11f, Color.argb(140, 255, 255, 255)).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(18), 0, dp(8))
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
     private fun tryBind(provider: ProcessCameraProvider, selector: CameraSelector, group: UseCaseGroup): Camera? =
