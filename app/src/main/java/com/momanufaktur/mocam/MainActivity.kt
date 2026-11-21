@@ -1152,6 +1152,16 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(chip("💬 Untertitel einstellen …") { openSubtitleEditor() },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
 
+        // ---------- Spenden ----------
+        settingsContent.addView(text("💛 Unterstützen", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        settingsContent.addView(text("MoCam ist Open Source, kostenlos und werbefrei – das Projekt lebt von Spenden.",
+            12f, Color.argb(200, 255, 255, 255)))
+        val donateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        donateRow.addView(chip("💛 Spenden") {}.also { attachDonateGesture(it) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+        donateRow.addView(chip("GitHub") { openUrl(GITHUB_URL) })
+        settingsContent.addView(donateRow)
+
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(14), 0, 0)
@@ -2426,6 +2436,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeShowDonateHint() {
         val prefs = getSharedPreferences("mocam_donate", MODE_PRIVATE)
+        if (prefs.getBoolean("disabled", false)) return
         val opens = prefs.getInt("opens", 0) + 1
         var target = prefs.getInt("target", 0)
         if (target == 0) target = kotlin.random.Random.nextInt(5, 11)
@@ -2435,6 +2446,68 @@ class MainActivity : AppCompatActivity() {
         }
         prefs.edit().putInt("opens", 0).putInt("target", kotlin.random.Random.nextInt(5, 11)).apply()
         window.decorView.postDelayed({ if (!isFinishing) showDonateDialog() }, 1200)
+    }
+
+    /**
+     * Spenden-Button: normales Tippen öffnet PayPal.
+     * Versteckt: 10 s gedrückt halten, danach innerhalb von 6 s dreimal kurz tippen
+     * -> Spenden-Popup beim Start aus (bzw. wieder an). Der Button selbst funktioniert immer.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachDonateGesture(v: View) {
+        var downAt = 0L
+        var armedAt = 0L
+        var taps = 0
+        v.setOnClickListener(null)
+        v.setOnTouchListener { view, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downAt = e.eventTime
+                    view.parent?.requestDisallowInterceptTouchEvent(true) // Scrollen darf das Halten nicht abbrechen
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val held = e.eventTime - downAt
+                    val now = e.eventTime
+                    when {
+                        held >= 10_000L -> {
+                            armedAt = now; taps = 0
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        }
+                        armedAt > 0L && now - armedAt <= 6_000L && held < 600L -> {
+                            taps++
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                            if (taps >= 3) {
+                                armedAt = 0L; taps = 0
+                                toggleDonatePopup()
+                            }
+                        }
+                        else -> {
+                            armedAt = 0L; taps = 0
+                            view.performClick()
+                            openUrl(DONATE_URL)
+                        }
+                    }
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> true
+                else -> true
+            }
+        }
+    }
+
+    private fun toggleDonatePopup() {
+        val prefs = getSharedPreferences("mocam_donate", MODE_PRIVATE)
+        val disabled = !prefs.getBoolean("disabled", false)
+        prefs.edit().putBoolean("disabled", disabled).putInt("opens", 0).apply()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(if (disabled) "🔕 Spenden-Popup deaktiviert" else "🔔 Spenden-Popup aktiviert")
+            .setMessage(
+                if (disabled) "Das Spenden-Popup beim App-Start wurde deaktiviert. Der Spenden-Button in den Einstellungen funktioniert weiterhin."
+                else "Das Spenden-Popup erscheint wieder zufällig bei jedem 5. bis 10. App-Start."
+            )
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun openUrl(url: String) {
