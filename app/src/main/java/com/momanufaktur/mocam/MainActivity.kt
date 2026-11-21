@@ -211,11 +211,11 @@ class MainActivity : AppCompatActivity() {
 
     private val pickIntro =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            if (uri != null) importClip(uri, introFile())
+            if (uri != null) importClip(uri, introFile(), "intro")
         }
     private val pickOutro =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            if (uri != null) importClip(uri, outroFile())
+            if (uri != null) importClip(uri, outroFile(), "outro")
         }
 
     private val pickLogo =
@@ -1017,7 +1017,12 @@ class MainActivity : AppCompatActivity() {
             openViewEditor()
         }
 
-        // 5. Unterstützen
+        // 5. Grundeinstellungen
+        entry("🔧 Grundeinstellungen", "Rück- & Frontkamera: Spiegeln, Ausrichtung von Logo und Videobild") {
+            openBaseEditor()
+        }
+
+        // 6. Unterstützen
         settingsContent.addView(text("💛 Unterstützen", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(18), 0, 0) })
         settingsContent.addView(text("MoCam ist Open Source, kostenlos und werbefrei – das Projekt lebt von Spenden.",
             12f, Color.argb(200, 255, 255, 255)))
@@ -1149,15 +1154,100 @@ class MainActivity : AppCompatActivity() {
                 isChecked = settings.introOutroEnabled
                 setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
             })
-            val clipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, 0) }
-            clipRow.addView(uiChip(if (introFile().exists()) "Intro ✓ ändern" else "Intro wählen") { pickIntro.launch("video/*") }, wrapLp(6))
-            clipRow.addView(uiChip(if (outroFile().exists()) "Outro ✓ ändern" else "Outro wählen") { pickOutro.launch("video/*") }, wrapLp(6))
-            clipRow.addView(uiChip("Entfernen") {
-                introFile().delete(); outroFile().delete()
-                toast("Intro und Outro für dieses Projekt entfernt")
-                openProjectEditor()
+            fun clipRow(label: String, kind: String, file: File, pick: () -> Unit) {
+                val exists = file.exists()
+                editorContent.addView(uiText(
+                    "$label: " + if (exists) (settings.clipName(kind) ?: "übernommener Clip") else "– keiner gewählt –",
+                    12f, if (exists) Color.WHITE else Color.argb(160, 255, 255, 255)).apply { setPadding(0, dp(6), 0, 0) })
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, 0) }
+                if (exists) row.addView(uiChip("▶ Abspielen") { playClip(file, label) }, wrapLp(6))
+                row.addView(uiChip(if (exists) "Ändern" else "$label wählen") { pick() }, wrapLp(6))
+                if (exists) row.addView(uiChip("Entfernen") {
+                    file.delete(); settings.setClipName(kind, null)
+                    toast("$label für dieses Projekt entfernt")
+                    openProjectEditor()
+                }, wrapLp(0))
+                editorContent.addView(row)
+            }
+            clipRow("Intro", "intro", introFile()) { pickIntro.launch("video/*") }
+            clipRow("Outro", "outro", outroFile()) { pickOutro.launch("video/*") }
+        }
+    }
+
+    /** Kleiner Player für Intro/Outro. */
+    private fun playClip(file: File, title: String) {
+        val video = android.widget.VideoView(this)
+        val box = android.widget.FrameLayout(this).apply {
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            addView(video, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, dp(320), Gravity.CENTER))
+        }
+        val dlg = MaterialAlertDialogBuilder(this)
+            .setTitle("▶ $title")
+            .setView(box)
+            .setPositiveButton("Schließen", null)
+            .create()
+        dlg.setOnDismissListener { video.stopPlayback() }
+        video.setMediaController(android.widget.MediaController(this).also { it.setAnchorView(video) })
+        video.setVideoURI(Uri.fromFile(file))
+        video.setOnPreparedListener { video.start() }
+        video.setOnErrorListener { _, _, _ -> toast("Clip kann nicht abgespielt werden"); true }
+        dlg.show()
+    }
+
+    /** Grundeinstellungen je Kamera: Frontkamera spiegeln, Ausrichtung von Logo und Videobild. */
+    private fun openBaseEditor() {
+        val front = isFrontCam
+        openEditor("🔧 Grundeinstellungen") {
+            editorContent.addView(uiText("Aktuell: " + (if (front) "Frontkamera" else "Rückkamera") +
+                " – mit „⟲“ die andere Kamera einstellen.", 12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(uiChip("⟲ Kamera wechseln") {
+                if (recording == null) {
+                    switchCamera()
+                    editorContent.postDelayed({ editorReturn = null; openBaseEditor() }, 300)
+                }
             }, wrapLp(0))
-            editorContent.addView(clipRow)
+            if (front) {
+                editorContent.addView(SwitchCompat(this).apply {
+                    text = "Automatisch spiegeln (wie ein Spiegel)"
+                    setTextColor(Color.WHITE)
+                    isChecked = settings.frontMirror
+                    setOnCheckedChangeListener { _, checked ->
+                        settings.frontMirror = checked
+                        applyCameraFixes()
+                        applyPreviewMirror()
+                    }
+                })
+            }
+            uiSection("Video-Ausrichtung")
+            editorContent.addView(uiText(
+                "Vorschau und Foto brauchen keine Einstellung. Fürs Video: Testvideo aufnehmen. Ist das Bild gegenüber der " +
+                    "Vorschau gespiegelt → „Bild ⇋“. Steht das Logo anders als in der Vorschau → „Logo ↻ / ⇋“.",
+                11f, Color.argb(170, 255, 255, 255)))
+            val target = Settings.TARGET_VIDEO
+            val fixText = uiText("Logo im Video: " + fixLabel(settings.getFix(front, target)), 13f).apply { setPadding(0, dp(6), 0, 0) }
+            editorContent.addView(fixText)
+            fun update(v: Int) {
+                settings.setFix(front, target, v)
+                applyCameraFixes()
+                fixText.text = "Logo im Video: " + fixLabel(v)
+            }
+            val fixRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            fixRow.addView(uiChip("Logo ↻ 90°") {
+                val v = settings.getFix(front, target)
+                update((v / 4) * 4 + (v % 4 + 1) % 4)
+            }, wrapLp(6))
+            fixRow.addView(uiChip("Logo ⇋") { update((settings.getFix(front, target) + 4) % 8) }, wrapLp(0))
+            editorContent.addView(fixRow)
+            val flipText = uiText("Video-Bild: " + if (settings.getVideoFlip(front)) "gespiegelt" else "normal", 13f)
+                .apply { setPadding(0, dp(8), 0, 0) }
+            editorContent.addView(flipText)
+            editorContent.addView(uiChip("Bild ⇋") {
+                val v = !settings.getVideoFlip(front)
+                settings.setVideoFlip(front, v)
+                applyCameraFixes()
+                flipText.text = "Video-Bild: " + if (v) "gespiegelt" else "normal"
+            }, wrapLp(0))
         }
     }
 
@@ -2436,8 +2526,14 @@ class MainActivity : AppCompatActivity() {
         return f
     }
 
-    private fun importClip(uri: Uri, target: File) {
+    private fun importClip(uri: Uri, target: File, kind: String) {
         toast("Clip wird übernommen …")
+        val name = try {
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        } catch (e: Exception) { null }
+        settings.setClipName(kind, name ?: "Clip")
         bg.execute {
             val ok = try {
                 contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use { input.copyTo(it) } } != null

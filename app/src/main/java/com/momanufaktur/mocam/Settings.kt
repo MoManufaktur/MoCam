@@ -143,6 +143,12 @@ class Settings(ctx: Context) {
         p.edit().putBoolean("videoFlip2_" + (if (front) "front" else "rear"), v).apply()
     }
 
+    /** Original-Dateiname des gewählten Intro/Outro-Clips im aktuellen Projekt. */
+    fun clipName(kind: String): String? = p.getString("clipName_$kind$ps", null)
+    fun setClipName(kind: String, name: String?) {
+        p.edit().putString("clipName_$kind$ps", name).apply()
+    }
+
     /** Intro/Outro je Projekt einmalig aus dem alten gemeinsamen Clip übernehmen? */
     fun takeLegacyClip(kind: String): Boolean {
         val k = "legacyClip_${kind}$ps"
