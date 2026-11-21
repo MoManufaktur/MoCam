@@ -1001,8 +1001,10 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Untertitel
         entry("💬 Untertitel",
-            (if (settings.subtitlesEnabled) "An" else "Aus") + " · " + subModeName(settings.subtitleMode) +
-                (if (Subtitles.isModelReady(this, settings.subtitleLang)) "" else " · Sprachmodell fehlt")) {
+            (if (settings.subtitlesEnabled) "An" else "Aus") + " · " +
+                (Subtitles.ENGINES.firstOrNull { it.first == settings.subtitleEngine }?.second ?: "") + " · " +
+                subModeName(settings.subtitleMode) +
+                (if (Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine)) "" else " · Sprachmodell fehlt")) {
             openSubtitleEditor()
         }
 
@@ -1134,6 +1136,12 @@ class MainActivity : AppCompatActivity() {
                 editorReturn = { openProjectEditor() }
                 openLowerThirdEditor()
             }, wrapLp(0))
+
+            // Wortliste für Untertitel
+            uiSection("📝 Wortliste für Untertitel")
+            editorContent.addView(uiText("Namen und Fachbegriffe, durch Komma getrennt – Whisper schreibt sie dann richtig.",
+                11f, Color.argb(170, 255, 255, 255)))
+            uiField("z. B. MoManufaktur, MMES, Steinbergkirche", settings.subtitleWords) { settings.subtitleWords = it }
 
             // Copyright (eigenes Untermenü)
             uiSection("©️ Copyright")
@@ -2467,7 +2475,7 @@ class MainActivity : AppCompatActivity() {
                 isChecked = settings.subtitlesEnabled
                 setOnCheckedChangeListener { _, c ->
                     settings.subtitlesEnabled = c
-                    if (c && !Subtitles.isModelReady(this@MainActivity, settings.subtitleLang)) toast("Bitte zuerst das Sprachmodell laden")
+                    if (c && !Subtitles.isModelReady(this@MainActivity, settings.subtitleLang, settings.subtitleEngine)) toast("Bitte zuerst das Sprachmodell laden")
                 }
             })
             uiSection("Sprache")
@@ -2490,17 +2498,40 @@ class MainActivity : AppCompatActivity() {
             uiSlider("Schriftgröße", 0.03f, 0.10f, st.size) { v -> update { it.copy(size = v) } }
             uiSlider("Hintergrund", 0f, 1f, st.bgAlpha) { v -> update { it.copy(bgAlpha = v) } }
 
+            uiSection("Erkennung")
+            val engines = Subtitles.ENGINES
+            uiChoice(engines.map { it.second }, engines.indexOfFirst { it.first == settings.subtitleEngine }) { i ->
+                settings.subtitleEngine = engines[i].first
+                openSubtitleEditor()
+            }
+            val engine = settings.subtitleEngine
+            editorContent.addView(uiText(when (engine) {
+                "whisper-base" -> "Whisper Schnell: deutlich genauer als Vosk, mit Satzzeichen. Dauert etwa so lange wie das Video."
+                "whisper-small" -> "Whisper Genau: beste Erkennung, mit Satzzeichen und Großschreibung. Dauert etwa 2–4× so lange wie das Video."
+                else -> "Vosk: schnell, aber ungenauer und ohne Satzzeichen."
+            }, 11f, Color.argb(170, 255, 255, 255)))
+            if (engine.startsWith("whisper") && !Whisper.available) editorContent.addView(uiText(
+                "⚠ Whisper läuft auf diesem Gerät nicht – bitte Vosk wählen.", 12f, Color.rgb(255, 160, 80)))
+
             uiSection("Sprachmodell")
             val lang = settings.subtitleLang
             val langName = Subtitles.LANGUAGES.firstOrNull { it.first == lang }?.second ?: lang
-            val modelText = uiText(if (Subtitles.isModelReady(this, lang)) "Bereit ✓ ($langName, offline)"
-                else "Noch nicht geladen (${Subtitles.modelSizeText(lang)}, einmalig)",
+            val ready = Subtitles.isModelReady(this, lang, engine)
+            val modelText = uiText(if (ready) "Bereit ✓ (" + (if (engine.startsWith("whisper")) "Deutsch & Englisch" else langName) + ", offline)"
+                else "Noch nicht geladen (${Subtitles.modelSizeText(lang, engine)}, einmalig – am besten im WLAN)",
                 12f, Color.argb(200, 255, 255, 255))
             editorContent.addView(modelText)
-            if (!Subtitles.isModelReady(this, lang)) editorContent.addView(uiChip("⬇ Sprachmodell laden") { downloadModel(modelText) }, wrapLp())
+            if (!ready) editorContent.addView(uiChip("⬇ Sprachmodell laden") { downloadModel(modelText) }, wrapLp())
             if (lang.startsWith("en")) editorContent.addView(uiText(
-                "Englisch nutzt ein gemeinsames Offline-Modell für UK und US. Bei UK stellt MoCam die Schreibweise auf britisch um (colour, centre, organise …).",
+                "Bei English (UK) stellt MoCam die Schreibweise auf britisch um (colour, centre, organise …).",
                 11f, Color.argb(170, 255, 255, 255)))
+
+            uiSection("📝 Wortliste")
+            editorContent.addView(uiText(
+                "Namen und Fachbegriffe des Projekts ${settings.selectedLogo?.let { projectName(it) } ?: "(ohne Logo)"}, " +
+                    "durch Komma getrennt. Whisper schreibt sie dann richtig, z. B.: MoManufaktur, MMES, Steinbergkirche",
+                11f, Color.argb(170, 255, 255, 255)))
+            uiField("Wortliste (Komma-getrennt)", settings.subtitleWords) { settings.subtitleWords = it }
 
             uiButtons {
                 settings.subtitleStyle = SubtitleStyle()
@@ -2548,12 +2579,13 @@ class MainActivity : AppCompatActivity() {
 
     /** Startet Untertitel und/oder Intro/Outro für ein fertiges Video. @return true wenn gestartet. */
     private fun startPostProcessing(uri: Uri): Boolean {
-        val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this, settings.subtitleLang) && settings.timelapse == 0
+        val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine) && settings.timelapse == 0
         val intro = if (settings.introOutroEnabled) introFile().takeIf { it.exists() } else null
         val outro = if (settings.introOutroEnabled) outroFile().takeIf { it.exists() } else null
         if (!subs && intro == null && outro == null) return false
         post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro,
-            settings.subtitleMode, settings.subtitleStyle, settings.subtitleLang))
+            settings.subtitleMode, settings.subtitleStyle, settings.subtitleLang,
+            settings.subtitleEngine, settings.subtitleWords))
         toast("Video gespeichert – wird jetzt bearbeitet")
         return true
     }
@@ -2562,7 +2594,7 @@ class MainActivity : AppCompatActivity() {
         status.text = "Sprachmodell wird geladen … 0 %"
         bg.execute {
             val ok = try {
-                Subtitles.downloadModel(this, settings.subtitleLang) { p -> runOnUiThread { status.text = "Sprachmodell wird geladen … $p %" } }
+                Subtitles.downloadModel(this, settings.subtitleLang, settings.subtitleEngine) { p -> runOnUiThread { status.text = "Sprachmodell wird geladen … $p %" } }
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Modell-Download", e)

@@ -40,7 +40,10 @@ class PostProcessor(private val ctx: Context) {
         /** "burn" = einbrennen, "srt" = .srt-Datei, "both" = beides */
         val subMode: String = "burn",
         val subStyle: SubtitleStyle = SubtitleStyle(),
-        val subLang: String = "de"
+        val subLang: String = "de",
+        val subEngine: String = "whisper-small",
+        /** Wortliste des Projekts für die Erkennung */
+        val subWords: String = ""
     )
 
     /** Status-Meldungen für die Anzeige (läuft auf dem Hauptthread). */
@@ -72,7 +75,9 @@ class PostProcessor(private val ctx: Context) {
             onStatus?.invoke("💬 Untertitel werden erkannt …")
             bg.execute {
                 val caps = try {
-                    Subtitles.recognize(ctx, job.input, job.subLang)
+                    Subtitles.recognize(ctx, job.input, job.subLang, job.subEngine, job.subWords) { p ->
+                        main.post { onStatus?.invoke("💬 Untertitel werden erkannt … $p %") }
+                    }
                 } catch (t: Throwable) {
                     Log.e(TAG, "Spracherkennung", t)
                     emptyList()

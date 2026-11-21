@@ -17,6 +17,21 @@ android {
         versionCode = build
         versionName = "1.1.$build"
         buildConfigField("String", "COMMIT", "\"$sha\"")
+
+        // Whisper (whisper.cpp) als native Bibliothek – nur 64-Bit-ARM (alle aktuellen Handys)
+        ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=c++_shared", "-DCMAKE_BUILD_TYPE=Release")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildFeatures {

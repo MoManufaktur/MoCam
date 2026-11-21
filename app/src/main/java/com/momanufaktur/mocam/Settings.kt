@@ -149,6 +149,16 @@ class Settings(ctx: Context) {
         p.edit().putString("clipName_$kind$ps", name).apply()
     }
 
+    /** #9 Erkennungs-Engine: "whisper-base", "whisper-small" oder "vosk" */
+    var subtitleEngine: String
+        get() = p.getString("sub_engine", "whisper-small") ?: "whisper-small"
+        set(v) = p.edit().putString("sub_engine", v).apply()
+
+    /** Wortliste des Projekts (Namen, Fachbegriffe) für die Untertitel-Erkennung */
+    var subtitleWords: String
+        get() = pS("subWords", "")
+        set(v) = p.edit().putString("subWords$ps", v).apply()
+
     /** Intro/Outro je Projekt einmalig aus dem alten gemeinsamen Clip übernehmen? */
     fun takeLegacyClip(kind: String): Boolean {
         val k = "legacyClip_${kind}$ps"

@@ -31,6 +31,111 @@ object Subtitles {
     /** Sprachen: "de" Deutsch, "en-gb" Englisch (UK), "en-us" Englisch (US). */
     val LANGUAGES = listOf("de" to "Deutsch", "en-gb" to "English (UK)", "en-us" to "English (US)")
 
+    /** Erkennungs-Engines: Whisper (genauer, mit Satzzeichen) oder das alte Vosk. */
+    val ENGINES = listOf(
+        "whisper-base" to "⚡ Whisper Schnell",
+        "whisper-small" to "🎯 Whisper Genau",
+        "vosk" to "Vosk (alt)"
+    )
+
+    private fun isWhisper(engine: String) = engine.startsWith("whisper")
+
+    private fun whisperFile(ctx: Context, engine: String) =
+        File(ctx.filesDir, if (engine == "whisper-base") "ggml-base-q5_1.bin" else "ggml-small-q5_1.bin")
+
+    private fun whisperUrl(engine: String) = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" +
+        if (engine == "whisper-base") "ggml-base-q5_1.bin" else "ggml-small-q5_1.bin"
+
+    fun modelSizeText(lang: String, engine: String) = when (engine) {
+        "whisper-base" -> "ca. 57 MB"
+        "whisper-small" -> "ca. 181 MB"
+        else -> modelSizeText(lang)
+    }
+
+    fun isModelReady(ctx: Context, lang: String, engine: String) =
+        if (isWhisper(engine)) whisperFile(ctx, engine).exists() && Whisper.available else isModelReady(ctx, lang)
+
+    /** Whisper ist mehrsprachig: ein Modell für Deutsch und Englisch. */
+    fun downloadModel(ctx: Context, lang: String, engine: String, onProgress: (Int) -> Unit) {
+        if (!isWhisper(engine)) return downloadModel(ctx, lang, onProgress)
+        val target = whisperFile(ctx, engine)
+        val tmp = File(target.path + ".part")
+        val conn = URL(whisperUrl(engine)).openConnection() as HttpURLConnection
+        conn.instanceFollowRedirects = true
+        conn.connectTimeout = 20000
+        conn.readTimeout = 30000
+        val total = conn.contentLengthLong
+        conn.inputStream.use { input ->
+            tmp.outputStream().use { out ->
+                val buf = ByteArray(128 * 1024)
+                var done = 0L
+                var last = -1
+                while (true) {
+                    val r = input.read(buf)
+                    if (r < 0) break
+                    out.write(buf, 0, r)
+                    done += r
+                    if (total > 0) {
+                        val p = (done * 100 / total).toInt()
+                        if (p != last) { last = p; onProgress(p) }
+                    }
+                }
+            }
+        }
+        if (tmp.length() < 10_000_000L) {
+            tmp.delete()
+            throw IllegalStateException("Download unvollständig")
+        }
+        target.delete()
+        tmp.renameTo(target)
+        onProgress(100)
+    }
+
+    /** Bekannte Whisper-„Halluzinationen“ bei Stille oder Musik (aus Untertitel-Trainingsdaten). */
+    private val HALLUCINATIONS = listOf(
+        "untertitel im auftrag", "untertitelung", "untertitel von", "amara.org", "copyright wdr", "swr 20",
+        "vielen dank fürs zuschauen", "vielen dank für's zuschauen", "thanks for watching", "subtitles by",
+        "untertitel der amara"
+    )
+
+    /**
+     * Erkennt die Sprache im Video.
+     * @param prompt Wortliste des Projekts (Namen, Fachbegriffe) – hilft Whisper bei der Schreibweise.
+     */
+    fun recognize(ctx: Context, video: Uri, lang: String, engine: String, prompt: String?,
+                  onProgress: (Int) -> Unit = {}): List<Caption> {
+        if (!isWhisper(engine)) return recognize(ctx, video, lang)
+        val model = whisperFile(ctx, engine)
+        if (!model.exists()) return emptyList()
+        // Ton als 16-kHz-Mono-PCM einsammeln und in Gleitkommazahlen umwandeln
+        val raw = java.io.ByteArrayOutputStream()
+        val hasAudio = AudioPcm.decode(ctx, video) { bytes, len -> raw.write(bytes, 0, len) }
+        if (!hasAudio || raw.size() < 3200) return emptyList()
+        val b = raw.toByteArray()
+        val pcm = FloatArray(b.size / 2) { i ->
+            ((b[2 * i].toInt() and 0xff) or (b[2 * i + 1].toInt() shl 8)).toShort() / 32768f
+        }
+        val words = prompt?.split(',', ';', '\n')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        val initial = when {
+            words.isEmpty() -> null
+            lang.startsWith("en") -> "Glossary: " + words.joinToString(", ") + "."
+            else -> "Begriffe: " + words.joinToString(", ") + "."
+        }
+        val segs = Whisper.transcribe(model.absolutePath, pcm, if (lang.startsWith("en")) "en" else "de", initial,
+            threads = 4, beam = 1, progress = { p -> onProgress(p) })
+        val caps = segs
+            .filter { s -> HALLUCINATIONS.none { s.text.lowercase().contains(it) } }
+            .filter { s -> s.text.any { it.isLetterOrDigit() } }
+            .map { Caption(it.start, maxOf(it.end, it.start + 0.6), it.text) }
+        val fixed = caps.mapIndexed { i, c ->
+            val next = caps.getOrNull(i + 1)?.start ?: Double.MAX_VALUE
+            c.copy(end = minOf(c.end + 0.3, next))
+        }
+        return if (lang.startsWith("en")) fixed.map { c ->
+            c.copy(text = englishFix(c.text, british = lang == "en-gb"))
+        } else fixed
+    }
+
     /** Für UK und US gibt es offline nur ein (US-)Modell – UK bekommt britische Schreibweise. */
     private fun modelKey(lang: String) = if (lang.startsWith("en")) "en" else "de"
 
