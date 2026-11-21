@@ -22,10 +22,12 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -98,6 +100,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnGrid: TextView
     private lateinit var btnZebra: TextView
     private lateinit var btnPro: TextView
+    private lateinit var btnLight: TextView
     private lateinit var btnInterval: TextView
     private lateinit var btnBracket: TextView
     private lateinit var btnHisto: TextView
@@ -356,6 +359,8 @@ class MainActivity : AppCompatActivity() {
         btnGrid = findViewById(R.id.btnGrid)
         btnZebra = findViewById(R.id.btnZebra)
         btnPro = findViewById(R.id.btnPro)
+        btnLight = findViewById(R.id.btnLight)
+        btnLight.setOnClickListener { setLightMode(!lightMode) }
         btnInterval = findViewById(R.id.btnInterval)
         btnBracket = findViewById(R.id.btnBracket)
         btnHisto = findViewById(R.id.btnHisto)
@@ -3326,6 +3331,127 @@ class MainActivity : AppCompatActivity() {
     // UI-Zustand
     // =====================================================================
 
+    // =====================================================================
+    // Ringlicht (Frontkamera): Display hell, Flächen weiß, Knöpfe mit Kontrast
+    // =====================================================================
+
+    private var lightMode = false
+    private val lightSaved = HashMap<View, Pair<android.graphics.drawable.Drawable?, Int?>>()
+    private var lightBar: LinearLayout? = null
+
+    private fun setLightMode(on: Boolean) {
+        if (on == lightMode) return
+        lightMode = on
+        val root = findViewById<View>(R.id.root)
+        val topBar = findViewById<View>(R.id.topBar)
+        if (on) {
+            for (v in listOf(root, topBar, bottomPanel)) if (!lightSaved.containsKey(v)) lightSaved[v] = v.background to null
+            root.setBackgroundColor(Color.WHITE)
+            topBar.setBackgroundColor(Color.argb(245, 255, 255, 255))
+            bottomPanel.setBackgroundColor(Color.argb(245, 255, 255, 255))
+            styleLight(topBar)
+            styleLight(bottomPanel)
+            showLightBar()
+            applyBrightness(settings.lightLevel)
+        } else {
+            for ((v, saved) in lightSaved) {
+                v.background = saved.first
+                if (v is TextView && saved.second != null) v.setTextColor(saved.second!!)
+            }
+            lightSaved.clear()
+            lightBar?.let { (it.parent as? ViewGroup)?.removeView(it) }
+            lightBar = null
+            window.attributes = window.attributes.apply {
+                screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+        updateUi()
+    }
+
+    private val chipState by lazy { getDrawable(R.drawable.chip_bg)?.constantState }
+    private val roundState by lazy { getDrawable(R.drawable.round_btn)?.constantState }
+    private val chipLightState by lazy { getDrawable(R.drawable.chip_light)?.constantState }
+    private val roundLightState by lazy { getDrawable(R.drawable.round_light)?.constantState }
+
+    /** Färbt alle Knöpfe und Texte eines Bereichs für den hellen Ringlicht-Modus um. */
+    private fun styleLight(v: View) {
+        if (v === lightBar || v.id == R.id.shutter || v.id == R.id.galleryThumb) return
+        if (v is ViewGroup) for (i in 0 until v.childCount) styleLight(v.getChildAt(i))
+        if (v !is TextView) return
+        val bg = v.background?.constantState
+        val dark = Color.rgb(17, 17, 17)
+        when {
+            bg == chipState || bg == roundState -> {
+                if (!lightSaved.containsKey(v)) lightSaved[v] = v.background to v.currentTextColor
+                v.setBackgroundResource(if (bg == roundState) R.drawable.round_light else R.drawable.chip_light)
+                v.setTextColor(dark)
+            }
+            bg == chipLightState || bg == roundLightState -> v.setTextColor(dark)
+            v.background == null -> {
+                if (!lightSaved.containsKey(v)) lightSaved[v] = null to v.currentTextColor
+                val c = v.currentTextColor
+                val accent = Color.red(c) > 200 && Color.green(c) > 150 && Color.blue(c) < 140
+                v.setTextColor(if (accent) Color.rgb(200, 80, 0) else dark)
+            }
+        }
+    }
+
+    private fun applyBrightness(level: Int) {
+        window.attributes = window.attributes.apply { screenBrightness = (level.coerceIn(5, 100)) / 100f }
+    }
+
+    /** Schieberegler für die Display-Helligkeit, direkt über der unteren Leiste. */
+    private fun showLightBar() {
+        val root = findViewById<FrameLayout>(R.id.root)
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.chip_light)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            elevation = dp(4).toFloat()
+        }
+        val label = TextView(this).apply {
+            text = "💡 ${settings.lightLevel} %"
+            textSize = 14f
+            setTextColor(Color.rgb(17, 17, 17))
+            minWidth = dp(70)
+        }
+        val seek = SeekBar(this).apply {
+            max = 95
+            progress = settings.lightLevel - 5
+            progressTintList = android.content.res.ColorStateList.valueOf(Color.rgb(40, 40, 40))
+            thumbTintList = android.content.res.ColorStateList.valueOf(Color.rgb(255, 160, 0))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
+                    val level = p + 5
+                    label.text = "💡 $level %"
+                    applyBrightness(level)
+                    if (fromUser) settings.lightLevel = level
+                }
+                override fun onStartTrackingTouch(s: SeekBar) {}
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+        }
+        val close = TextView(this).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(Color.rgb(17, 17, 17))
+            setPadding(dp(10), 0, 0, 0)
+            setOnClickListener { setLightMode(false) }
+        }
+        bar.addView(label)
+        bar.addView(seek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(close)
+        val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM).apply { setMargins(dp(16), 0, dp(16), dp(8)) }
+        root.addView(bar, lp)
+        lightBar = bar
+        // über der unteren Leiste platzieren (deren Höhe ändert sich je nach Modus)
+        val place = { lp.bottomMargin = bottomPanel.height + dp(8); bar.layoutParams = lp }
+        bottomPanel.post(place)
+        bottomPanel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (lightBar === bar) bar.post(place) }
+    }
+
     private fun updateUi() {
         val rec = recording != null
 
@@ -3394,6 +3520,12 @@ class MainActivity : AppCompatActivity() {
         modePhoto.alpha = if (rec) 0.3f else 1f
         modeVideo.alpha = if (rec) 0.3f else 1f
         topBar.alpha = if (rec) 0.6f else 1f
+
+        // Ringlicht nur bei der Frontkamera
+        btnLight.visibility = if (isFrontCam) View.VISIBLE else View.GONE
+        btnLight.text = if (lightMode) "💡 Licht an" else "💡 Licht"
+        if (lightMode && !isFrontCam) { setLightMode(false); return }
+        if (lightMode) { styleLight(topBar); styleLight(bottomPanel) }
     }
 
     private fun extensionName(mode: Int) = when (mode) {

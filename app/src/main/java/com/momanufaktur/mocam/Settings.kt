@@ -149,6 +149,11 @@ class Settings(ctx: Context) {
         p.edit().putString("clipName_$kind$ps", name).apply()
     }
 
+    /** Ringlicht-Helligkeit des Displays in Prozent */
+    var lightLevel: Int
+        get() = int("lightLevel", 100)
+        set(v) = p.edit().putInt("lightLevel", v).apply()
+
     /** #9 Erkennungs-Engine: "whisper-base", "whisper-small" oder "vosk" */
     var subtitleEngine: String
         get() = p.getString("sub_engine", "whisper-small") ?: "whisper-small"
