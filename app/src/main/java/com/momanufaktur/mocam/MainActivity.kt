@@ -810,9 +810,10 @@ class MainActivity : AppCompatActivity() {
         else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
         val viewPort = ViewPort.Builder(Rational(fmt.w, fmt.h), Surface.ROTATION_0).build()
 
-        val preview = Preview.Builder()
+        val previewBuilder = Preview.Builder()
             .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratioStrategy).build())
-            .build()
+        attachIsoReader(previewBuilder) // aktuellen ISO-Wert mitlesen (Ringlicht-Automatik)
+        val preview = previewBuilder.build()
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
         /** Baut eine UseCaseGroup mit/ohne Effekt und mit/ohne Bildausschnitt. */
@@ -2974,6 +2975,17 @@ class MainActivity : AppCompatActivity() {
                 setOnCheckedChangeListener { _, c -> settings.peaking = c; fxState.peaking = c }
             })
 
+            // ---- Ringlicht (Frontkamera) ----
+            uiSection("💡 Ringlicht (Frontkamera)")
+            uiChoice(listOf("Automatisch", "Manuell"), if (settings.lightAuto) 0 else 1) { i ->
+                if (lightMode) setLightAuto(i == 0) else settings.lightAuto = i == 0
+            }
+            editorContent.addView(uiText(
+                "Automatisch: Das Display wird so hell wie nötig, damit die Kamera mit niedrigem ISO arbeitet " +
+                    "(rauscharmes Bild). Bei manuellem ISO regelt es nach der Helligkeit in der Bildmitte. " +
+                    "Tipp: 📊 Histogramm einschalten – Berg ganz rechts = Gesicht zu hell.",
+                11f, Color.argb(170, 255, 255, 255)))
+
             uiButtons {
                 settings.proIso = 0; settings.proShutterNs = 0L; settings.proWb = 0; settings.proFocus = -1f
                 applyProSettings(); updateUi()
@@ -3336,8 +3348,98 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private var lightMode = false
+    @Volatile private var currentIso = 0
+    private var lightSeek: SeekBar? = null
+    private var lightLabel: TextView? = null
+    private var lightAutoChip: TextView? = null
+    private var lightLevelNow = 100
+
+    /**
+     * Ringlicht-Automatik: hält den ISO-Wert der Kamera niedrig (sauberes, rauscharmes Bild) mit so wenig
+     * Display-Licht wie nötig. Bei manueller Belichtung (fester ISO) regelt sie stattdessen nach der
+     * Bildhelligkeit in der Bildmitte (Gesicht).
+     */
+    private val lightAutoTicker = object : Runnable {
+        override fun run() {
+            if (!lightMode || !settings.lightAuto) return
+            var step = 0
+            if (!proManualExposure() && currentIso > 0) {
+                step = when {
+                    currentIso > 400 -> +6
+                    currentIso > 250 -> +3
+                    currentIso < 100 -> -4
+                    currentIso < 150 -> -2
+                    else -> 0
+                }
+                applyLightStep(step)
+            } else {
+                val bmp = try { previewView.bitmap } catch (e: Exception) { null }
+                if (bmp != null) bg.execute {
+                    val w = bmp.width; val h = bmp.height
+                    var sum = 0.0; var n = 0
+                    var y = h / 4
+                    while (y < h * 3 / 4) {
+                        var x = w / 4
+                        while (x < w * 3 / 4) {
+                            val c = bmp.getPixel(x, y)
+                            sum += 0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)
+                            n++; x += 8
+                        }
+                        y += 8
+                    }
+                    bmp.recycle()
+                    val lum = if (n > 0) sum / n / 255.0 else 0.5
+                    val st = when { lum < 0.35 -> +5; lum < 0.42 -> +2; lum > 0.62 -> -5; lum > 0.55 -> -2; else -> 0 }
+                    runOnUiThread { applyLightStep(st) }
+                }
+            }
+            previewView.postDelayed(this, 600)
+        }
+    }
+
+    private fun applyLightStep(step: Int) {
+        if (step == 0 || !lightMode) return
+        val level = (lightLevelNow + step).coerceIn(20, 100)
+        if (level == lightLevelNow) return
+        setLightLevelUi(level)
+    }
+
+    private fun setLightLevelUi(level: Int) {
+        lightLevelNow = level
+        applyBrightness(level)
+        lightSeek?.progress = level - 5
+        lightLabel?.text = (if (settings.lightAuto) "💡 Auto " else "💡 ") + "$level %"
+    }
+
+    private fun setLightAuto(auto: Boolean) {
+        settings.lightAuto = auto
+        lightAutoChip?.text = if (auto) "Auto" else "Manuell"
+        lightSeek?.alpha = if (auto) 0.45f else 1f
+        if (auto) {
+            previewView.removeCallbacks(lightAutoTicker)
+            lightAutoTicker.run()
+        } else {
+            previewView.removeCallbacks(lightAutoTicker)
+            setLightLevelUi(settings.lightLevel)
+        }
+        setLightLevelUi(lightLevelNow)
+    }
     private val lightSaved = HashMap<View, Pair<android.graphics.drawable.Drawable?, Int?>>()
     private var lightBar: LinearLayout? = null
+
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun attachIsoReader(b: Preview.Builder) {
+        androidx.camera.camera2.interop.Camera2Interop.Extender(b).setSessionCaptureCallback(
+            object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: android.hardware.camera2.CameraCaptureSession,
+                    request: android.hardware.camera2.CaptureRequest,
+                    result: android.hardware.camera2.TotalCaptureResult
+                ) {
+                    result.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY)?.let { currentIso = it }
+                }
+            })
+    }
 
     private fun setLightMode(on: Boolean) {
         if (on == lightMode) return
@@ -3353,16 +3455,19 @@ class MainActivity : AppCompatActivity() {
             bottomPanel.background = android.graphics.drawable.ColorDrawable(Color.argb(245, 255, 255, 255))
             styleLight(topBar)
             styleLight(bottomPanel)
+            lightLevelNow = settings.lightLevel
             showLightBar()
-            applyBrightness(settings.lightLevel)
+            setLightAuto(settings.lightAuto)
         } else {
             for ((v, saved) in lightSaved) {
                 v.background = saved.first
                 if (v is TextView && saved.second != null) v.setTextColor(saved.second!!)
             }
             lightSaved.clear()
+            previewView.removeCallbacks(lightAutoTicker)
             lightBar?.let { (it.parent as? ViewGroup)?.removeView(it) }
             lightBar = null
+            lightSeek = null; lightLabel = null; lightAutoChip = null
             window.attributes = window.attributes.apply {
                 screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
             }
@@ -3416,7 +3521,7 @@ class MainActivity : AppCompatActivity() {
             text = "💡 ${settings.lightLevel} %"
             textSize = 14f
             setTextColor(Color.rgb(17, 17, 17))
-            minWidth = dp(70)
+            minWidth = dp(96)
         }
         val seek = SeekBar(this).apply {
             max = 95
@@ -3425,10 +3530,11 @@ class MainActivity : AppCompatActivity() {
             thumbTintList = android.content.res.ColorStateList.valueOf(Color.rgb(255, 160, 0))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    val level = p + 5
-                    label.text = "💡 $level %"
-                    applyBrightness(level)
-                    if (fromUser) settings.lightLevel = level
+                    if (!fromUser) return
+                    // Regler anfassen = manuell
+                    if (settings.lightAuto) setLightAuto(false)
+                    settings.lightLevel = p + 5
+                    setLightLevelUi(p + 5)
                 }
                 override fun onStartTrackingTouch(s: SeekBar) {}
                 override fun onStopTrackingTouch(s: SeekBar) {}
@@ -3441,8 +3547,18 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(10), 0, 0, 0)
             setOnClickListener { setLightMode(false) }
         }
+        val autoChip = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.rgb(17, 17, 17))
+            setBackgroundResource(R.drawable.chip_light)
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            setOnClickListener { setLightAuto(!settings.lightAuto) }
+        }
+        bar.addView(autoChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
         bar.addView(label)
         bar.addView(seek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        lightSeek = seek; lightLabel = label; lightAutoChip = autoChip
         bar.addView(close)
         val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM).apply { setMargins(dp(16), 0, dp(16), dp(8)) }

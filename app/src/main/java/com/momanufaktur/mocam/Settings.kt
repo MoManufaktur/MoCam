@@ -149,6 +149,11 @@ class Settings(ctx: Context) {
         p.edit().putString("clipName_$kind$ps", name).apply()
     }
 
+    /** Ringlicht automatisch regeln */
+    var lightAuto: Boolean
+        get() = bool("lightAuto", true)
+        set(v) = p.edit().putBoolean("lightAuto", v).apply()
+
     /** Ringlicht-Helligkeit des Displays in Prozent */
     var lightLevel: Int
         get() = int("lightLevel", 100)
