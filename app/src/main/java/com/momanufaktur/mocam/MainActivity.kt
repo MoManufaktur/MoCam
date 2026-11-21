@@ -1157,7 +1157,12 @@ class MainActivity : AppCompatActivity() {
         settingsContent.addView(text("MoCam ist Open Source, kostenlos und werbefrei – das Projekt lebt von Spenden.",
             12f, Color.argb(200, 255, 255, 255)))
         val donateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
-        donateRow.addView(chip("💛 Spenden") {}.also { attachDonateGesture(it) },
+        donateRow.addView(chip("💛 Spenden") {}.also {
+            it.textSize = 15f
+            it.setPadding(dp(22), dp(20), dp(22), dp(20)) // doppelt so hoch wie die übrigen Knöpfe
+            it.gravity = Gravity.CENTER
+            attachDonateGesture(it)
+        },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
         donateRow.addView(chip("GitHub") { openUrl(GITHUB_URL) })
         settingsContent.addView(donateRow)
@@ -2455,30 +2460,42 @@ class MainActivity : AppCompatActivity() {
      */
     @SuppressLint("ClickableViewAccessibility")
     private fun attachDonateGesture(v: View) {
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
         var downAt = 0L
-        var armedAt = 0L
+        var armedAt = 0L      // Zeitpunkt, an dem die 10 s erreicht wurden
+        var armedNow = false  // in diesem Druck scharf geschaltet
         var taps = 0
+        // Wird nach 10 s Halten ausgelöst – noch während der Finger liegt, damit man spürt, wann man loslassen kann
+        val arm = Runnable {
+            armedNow = true
+            armedAt = android.os.SystemClock.uptimeMillis()
+            taps = 0
+            vibrate(longArrayOf(0, 60, 80, 60)) // doppeltes Summen = scharf
+        }
         v.setOnClickListener(null)
         v.setOnTouchListener { view, e ->
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     downAt = e.eventTime
+                    armedNow = false
                     view.parent?.requestDisallowInterceptTouchEvent(true) // Scrollen darf das Halten nicht abbrechen
-                    true
+                    view.isPressed = true
+                    h.postDelayed(arm, 10_000L)
                 }
-                android.view.MotionEvent.ACTION_UP -> {
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    h.removeCallbacks(arm)
+                    view.isPressed = false
                     val held = e.eventTime - downAt
                     val now = e.eventTime
                     when {
-                        held >= 10_000L -> {
-                            armedAt = now; taps = 0
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-                        }
-                        armedAt > 0L && now - armedAt <= 6_000L && held < 600L -> {
+                        armedNow -> Unit // gerade scharf geschaltet: nichts öffnen
+                        e.actionMasked == android.view.MotionEvent.ACTION_CANCEL -> Unit
+                        armedAt > 0L && now - armedAt <= 8_000L && held < 800L -> {
                             taps++
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                            vibrate(longArrayOf(0, 35))
                             if (taps >= 3) {
                                 armedAt = 0L; taps = 0
+                                vibrate(longArrayOf(0, 200))
                                 toggleDonatePopup()
                             }
                         }
@@ -2488,11 +2505,23 @@ class MainActivity : AppCompatActivity() {
                             openUrl(DONATE_URL)
                         }
                     }
-                    true
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> true
-                else -> true
             }
+            true
+        }
+    }
+
+    /** Vibration direkt über den Vibrationsmotor – unabhängig von der Huawei-Einstellung „Vibration bei Berührung“. */
+    @Suppress("DEPRECATION")
+    private fun vibrate(pattern: LongArray) {
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= 31)
+                (getSystemService(VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
+            else (getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator)
+            if (Build.VERSION.SDK_INT >= 26) vib.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            else vib.vibrate(pattern, -1)
+        } catch (e: Exception) {
+            Log.w(TAG, "Vibration", e)
         }
     }
 
