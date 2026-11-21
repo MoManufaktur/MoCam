@@ -3345,10 +3345,12 @@ class MainActivity : AppCompatActivity() {
         val root = findViewById<View>(R.id.root)
         val topBar = findViewById<View>(R.id.topBar)
         if (on) {
-            for (v in listOf(root, topBar, bottomPanel)) if (!lightSaved.containsKey(v)) lightSaved[v] = v.background to null
-            root.setBackgroundColor(Color.WHITE)
-            topBar.setBackgroundColor(Color.argb(245, 255, 255, 255))
-            bottomPanel.setBackgroundColor(Color.argb(245, 255, 255, 255))
+            // Original-Hintergründe als Kopie sichern (setBackgroundColor würde das Original überschreiben)
+            for (v in listOf(root, topBar, bottomPanel)) if (!lightSaved.containsKey(v))
+                lightSaved[v] = v.background?.constantState?.newDrawable()?.mutate() to null
+            root.background = android.graphics.drawable.ColorDrawable(Color.WHITE)
+            topBar.background = android.graphics.drawable.ColorDrawable(Color.argb(245, 255, 255, 255))
+            bottomPanel.background = android.graphics.drawable.ColorDrawable(Color.argb(245, 255, 255, 255))
             styleLight(topBar)
             styleLight(bottomPanel)
             showLightBar()
@@ -3522,7 +3524,9 @@ class MainActivity : AppCompatActivity() {
         topBar.alpha = if (rec) 0.6f else 1f
 
         // Ringlicht nur bei der Frontkamera
+        // Frontkamera: nur 💡 Licht (Display als Ringlicht) · Rückkamera: nur ⚡ Blitz / 🔦 Taschenlampe
         btnLight.visibility = if (isFrontCam) View.VISIBLE else View.GONE
+        btnFlash.visibility = if (isFrontCam) View.GONE else View.VISIBLE
         btnLight.text = if (lightMode) "💡 Licht an" else "💡 Licht"
         if (lightMode && !isFrontCam) { setLightMode(false); return }
         if (lightMode) { styleLight(topBar); styleLight(bottomPanel) }
