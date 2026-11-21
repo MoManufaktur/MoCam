@@ -23,6 +23,9 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
+      - name: Native Bibliotheken prüfen
+        run: unzip -l app/build/outputs/apk/debug/*.apk | grep "\.so" || true
+
       - name: APK hochladen
         uses: actions/upload-artifact@v5
         with:
