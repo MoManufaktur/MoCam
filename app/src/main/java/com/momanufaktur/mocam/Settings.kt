@@ -48,9 +48,31 @@ class Settings(ctx: Context) {
      */
     var logoContext: String = "rear_video"
 
-    private fun lk(key: String) = key + "_" + logoContext
-    private fun lf(key: String, def: Float) = p.getFloat(lk(key), p.getFloat(key, def))
-    private fun li(key: String, def: Int) = p.getInt(lk(key), p.getInt(key, def))
+    // ---------------- Projekte ----------------
+    // Ein Projekt = ein Logo aus der Bibliothek. Logo-Position (je Kamera/Modus), Bauchbinde,
+    // Copyright und Intro/Outro gelten je Projekt. Fehlt ein Projektwert, gilt der bisherige globale Wert.
+
+    /** Dateiname des gewählten Logos = aktuelles Projekt (gilt für alle Kameras und Modi). */
+    var selectedLogo: String?
+        get() = if (p.contains("project")) p.getString("project", "")?.ifEmpty { null }
+                else p.getString("selectedLogo_rear_video", null) ?: p.getString("selectedLogo", null)
+        set(v) = p.edit().putString("project", v ?: "").apply()
+
+    /** Schlüssel-Endung des aktuellen Projekts. */
+    private val ps: String get() = "@" + (selectedLogo ?: "_")
+
+    /** Für Dateinamen (Intro/Outro je Projekt). */
+    val projectFileKey: String
+        get() = (selectedLogo ?: "ohne_logo").replace(Regex("[^A-Za-z0-9._-]"), "_")
+
+    private fun pS(key: String, def: String) = p.getString(key + ps, null) ?: p.getString(key, def) ?: def
+    private fun pB(key: String, def: Boolean) = p.getBoolean(key + ps, p.getBoolean(key, def))
+    private fun pI(key: String, def: Int) = p.getInt(key + ps, p.getInt(key, def))
+    private fun pF(key: String, def: Float) = p.getFloat(key + ps, p.getFloat(key, def))
+
+    private fun lk(key: String) = key + "_" + logoContext + ps
+    private fun lf(key: String, def: Float) = p.getFloat(lk(key), p.getFloat(key + "_" + logoContext, p.getFloat(key, def)))
+    private fun li(key: String, def: Int) = p.getInt(lk(key), p.getInt(key + "_" + logoContext, p.getInt(key, def)))
 
     var logoCx: Float
         get() = lf("logoCx", 0.80f)
@@ -74,12 +96,12 @@ class Settings(ctx: Context) {
     /** Überträgt Logo, Position, Größe, Deckkraft und Drehung des aktuellen Registers auf alle anderen. */
     fun copyLogoToAllContexts() {
         val cx = logoCx; val cy = logoCy; val w = logoW; val a = logoAlpha
-        val rot = logoRotation; val logo = selectedLogo
+        val rot = logoRotation
         val e = p.edit()
         logoContexts.forEach { c ->
-            e.putFloat("logoCx_$c", cx).putFloat("logoCy_$c", cy).putFloat("logoW_$c", w)
-                .putFloat("logoAlpha_$c", a).putInt("logoRotation_$c", rot)
-                .putString("selectedLogo_$c", logo)
+            val k = "_" + c + ps
+            e.putFloat("logoCx$k", cx).putFloat("logoCy$k", cy).putFloat("logoW$k", w)
+                .putFloat("logoAlpha$k", a).putInt("logoRotation$k", rot)
         }
         e.apply()
     }
@@ -121,12 +143,16 @@ class Settings(ctx: Context) {
         p.edit().putBoolean("videoFlip2_" + (if (front) "front" else "rear"), v).apply()
     }
 
+    /** Intro/Outro je Projekt einmalig aus dem alten gemeinsamen Clip übernehmen? */
+    fun takeLegacyClip(kind: String): Boolean {
+        val k = "legacyClip_${kind}$ps"
+        if (p.getBoolean(k, false)) return false
+        p.edit().putBoolean(k, true).apply()
+        return true
+    }
+
     private fun fixKey(front: Boolean, target: String) = "fix2_" + (if (front) "front_" else "rear_") + target
 
-    /** Dateiname des gewählten Logos in der Logo-Bibliothek. */
-    var selectedLogo: String?
-        get() = p.getString(lk("selectedLogo"), p.getString("selectedLogo", null))
-        set(v) = p.edit().putString(lk("selectedLogo"), v).apply()
 
     var prompterText: String
         get() = p.getString("prompterText", "") ?: ""
@@ -169,16 +195,16 @@ class Settings(ctx: Context) {
         set(v) = p.edit().putBoolean("lowerEnabled", v).apply()
 
     var lowerName: String
-        get() = p.getString("lowerName", "Kai") ?: ""
-        set(v) = p.edit().putString("lowerName", v).apply()
+        get() = pS("lowerName", "Kai")
+        set(v) = p.edit().putString("lowerName$ps", v).apply()
 
     var lowerTitle: String
-        get() = p.getString("lowerTitle", "Gründer · MoManufaktur") ?: ""
-        set(v) = p.edit().putString("lowerTitle", v).apply()
+        get() = pS("lowerTitle", "Gründer · MoManufaktur")
+        set(v) = p.edit().putString("lowerTitle$ps", v).apply()
 
     var lowerSeconds: Int
-        get() = int("lowerSeconds", 5)
-        set(v) = p.edit().putInt("lowerSeconds", v).apply()
+        get() = pI("lowerSeconds", 5)
+        set(v) = p.edit().putInt("lowerSeconds$ps", v).apply()
 
     /** #5 Zeitraffer-Faktor (0 = aus). */
     var timelapse: Int
@@ -192,8 +218,8 @@ class Settings(ctx: Context) {
 
     /** #10 Intro/Outro an jedes Video anhängen. */
     var introOutroEnabled: Boolean
-        get() = bool("introOutro", false)
-        set(v) = p.edit().putBoolean("introOutro", v).apply()
+        get() = pB("introOutro", false)
+        set(v) = p.edit().putBoolean("introOutro$ps", v).apply()
 
     /** #9 Untertitel automatisch einbrennen. */
     var subtitlesEnabled: Boolean
@@ -205,19 +231,19 @@ class Settings(ctx: Context) {
         get() {
             val d = LowerThirdStyle()
             return LowerThirdStyle(
-                x = float("lt_x", d.x), y = float("lt_y", d.y), width = float("lt_w", d.width),
-                nameSize = float("lt_ns", d.nameSize), titleSize = float("lt_ts", d.titleSize),
-                font = int("lt_font", d.font),
-                bgColor = int("lt_bg", d.bgColor), bgAlpha = float("lt_bga", d.bgAlpha),
-                accentColor = int("lt_acc", d.accentColor),
-                nameColor = int("lt_nc", d.nameColor), titleColor = int("lt_tc", d.titleColor)
+                x = pF("lt_x", d.x), y = pF("lt_y", d.y), width = pF("lt_w", d.width),
+                nameSize = pF("lt_ns", d.nameSize), titleSize = pF("lt_ts", d.titleSize),
+                font = pI("lt_font", d.font),
+                bgColor = pI("lt_bg", d.bgColor), bgAlpha = pF("lt_bga", d.bgAlpha),
+                accentColor = pI("lt_acc", d.accentColor),
+                nameColor = pI("lt_nc", d.nameColor), titleColor = pI("lt_tc", d.titleColor)
             )
         }
         set(v) = p.edit()
-            .putFloat("lt_x", v.x).putFloat("lt_y", v.y).putFloat("lt_w", v.width)
-            .putFloat("lt_ns", v.nameSize).putFloat("lt_ts", v.titleSize).putInt("lt_font", v.font)
-            .putInt("lt_bg", v.bgColor).putFloat("lt_bga", v.bgAlpha).putInt("lt_acc", v.accentColor)
-            .putInt("lt_nc", v.nameColor).putInt("lt_tc", v.titleColor)
+            .putFloat("lt_x$ps", v.x).putFloat("lt_y$ps", v.y).putFloat("lt_w$ps", v.width)
+            .putFloat("lt_ns$ps", v.nameSize).putFloat("lt_ts$ps", v.titleSize).putInt("lt_font$ps", v.font)
+            .putInt("lt_bg$ps", v.bgColor).putFloat("lt_bga$ps", v.bgAlpha).putInt("lt_acc$ps", v.accentColor)
+            .putInt("lt_nc$ps", v.nameColor).putInt("lt_tc$ps", v.titleColor)
             .apply()
 
     /** #9 Gestaltung der Untertitel */
@@ -254,16 +280,16 @@ class Settings(ctx: Context) {
 
     /** #15 Copyright/Autor in den Foto-Metadaten. */
     var copyrightEnabled: Boolean
-        get() = bool("copyrightOn", true)
-        set(v) = p.edit().putBoolean("copyrightOn", v).apply()
+        get() = pB("copyrightOn", true)
+        set(v) = p.edit().putBoolean("copyrightOn$ps", v).apply()
 
     var copyrightAuthor: String
-        get() = p.getString("copyrightAuthor", "Kai") ?: ""
-        set(v) = p.edit().putString("copyrightAuthor", v).apply()
+        get() = pS("copyrightAuthor", "Kai")
+        set(v) = p.edit().putString("copyrightAuthor$ps", v).apply()
 
     var copyrightText: String
-        get() = p.getString("copyrightText", "© MoManufaktur") ?: ""
-        set(v) = p.edit().putString("copyrightText", v).apply()
+        get() = pS("copyrightText", "© MoManufaktur")
+        set(v) = p.edit().putString("copyrightText$ps", v).apply()
 
     /** #16 Sprachauslöser */
     var voiceTrigger: Boolean

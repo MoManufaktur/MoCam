@@ -954,7 +954,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildSettings() {
         settingsContent.removeAllViews()
-        val front = isFrontCam
 
         fun text(t: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false) =
             TextView(this).apply {
@@ -973,187 +972,53 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { onClick() }
         }
 
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        header.addView(
-            text("⚙️ Grundeinstellungen – " + logoContextName(), 17f, getColor(R.color.accent), true),
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        header.addView(chip("⟲ Kamera wechseln") {
-            if (recording == null) {
-                switchCamera()
-                settingsContent.postDelayed({ buildSettings() }, 300)
+        /** Großer Menüeintrag: Titel + Kurzinfo, öffnet ein Untermenü. */
+        fun entry(title: String, info: String, onClick: () -> Unit) {
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundResource(R.drawable.chip_bg)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                setOnClickListener { onClick() }
             }
-        })
-        settingsContent.addView(header)
-
-        settingsContent.addView(text(
-            "Logo-Position, Größe und Drehung gelten je Kamera und Modus.",
-            12f, Color.argb(200, 255, 255, 255)
-        ).apply { setPadding(0, dp(6), 0, dp(8)) })
-
-        if (front) {
-            val sw = SwitchCompat(this).apply {
-                text = "Automatisch spiegeln (wie ein Spiegel)"
-                setTextColor(Color.WHITE)
-                isChecked = settings.frontMirror
-                setOnCheckedChangeListener { _, checked ->
-                    settings.frontMirror = checked
-                    applyCameraFixes()
-                    applyPreviewMirror()
-                }
-            }
-            settingsContent.addView(sw)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(text(title, 15f, Color.WHITE, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(text("›", 20f, getColor(R.color.accent), true))
+            box.addView(row)
+            if (info.isNotEmpty()) box.addView(text(info, 12f, Color.argb(190, 255, 255, 255)))
+            settingsContent.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         }
 
-        settingsContent.addView(chip("🏷 Logo einstellen – " + logoContextName()) {
-            openLogoPanel(fromSettings = true)
-        }.apply { setPadding(dp(14), dp(10), dp(14), dp(10)) },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        settingsContent.addView(text("⚙️ Einstellungen", 17f, getColor(R.color.accent), true))
 
-        settingsContent.addView(text("Video-Ausrichtung", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(12), 0, 0) })
-
-        settingsContent.addView(text(
-            "Vorschau und Foto brauchen keine Einstellung – das Logo liegt dort als Ebene über dem Bild. " +
-            "Fürs Video: Testvideo aufnehmen. Ist das Bild gegenüber der Vorschau gespiegelt → „Bild ⇋“. " +
-            "Steht das Logo anders als in der Vorschau → „Logo ↻ / ⇋“, bis es passt.",
-            12f, Color.argb(200, 255, 255, 255)
-        ).apply { setPadding(0, dp(4), 0, 0) })
-
-        listOf(
-            Settings.TARGET_VIDEO to "Video-Aufnahme"
-        ).forEach { (target, name) ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(8), 0, 0)
-            }
-            val value = text(name + "\n" + fixLabel(settings.getFix(front, target)), 13f)
-            row.addView(value, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            fun update(v: Int) {
-                settings.setFix(front, target, v)
-                applyCameraFixes()
-                value.text = name + "\n" + fixLabel(v)
-            }
-            row.addView(chip("Logo ↻ 90°") {
-                val v = settings.getFix(front, target)
-                update((v / 4) * 4 + (v % 4 + 1) % 4)
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-            row.addView(chip("Logo ⇋") {
-                val v = settings.getFix(front, target)
-                update((v + 4) % 8)
-            })
-            settingsContent.addView(row)
+        // 1. Projekteinstellungen (alles, was zum gewählten Logo gehört)
+        val logo = settings.selectedLogo
+        entry("📁 Projekteinstellungen",
+            if (logo == null) "Noch kein Logo gewählt"
+            else "Projekt: ${projectName(logo)} · Ordner: ${folderLabel(settings.folderForLogo(logo))}") {
+            openProjectEditor()
         }
 
-        // Bild der Video-Aufnahme links/rechts tauschen (falls das Video gegenüber der Vorschau gespiegelt ist)
-        val flipRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(8), 0, 0)
-        }
-        val flipText = text("Video-Bild\n" + if (settings.getVideoFlip(front)) "gespiegelt" else "normal", 13f)
-        flipRow.addView(flipText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        flipRow.addView(chip("Bild ⇋") {
-            val v = !settings.getVideoFlip(front)
-            settings.setVideoFlip(front, v)
-            applyCameraFixes()
-            flipText.text = "Video-Bild\n" + if (v) "gespiegelt" else "normal"
-        })
-        settingsContent.addView(flipRow)
-
-        // ---------- #6 Bauchbinde ----------
-        settingsContent.addView(text("🪪 Bauchbinde (Video)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(chip("🪪 Bauchbinde gestalten …") { openLowerThirdEditor() },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
-
-        // ---------- #8 Mikrofon ----------
-        settingsContent.addView(text("🎤 Mikrofon", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(text("Erkannt: " + inputDevicesText(), 12f, Color.argb(200, 255, 255, 255)))
-        val micRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
-        fun micLabel() = if (settings.micMode == "bluetooth") "Quelle: Bluetooth-Headset" else "Quelle: Automatisch (intern / USB)"
-        micRow.addView(chip(micLabel()) {}.also { m ->
-            m.setOnClickListener {
-                settings.micMode = if (settings.micMode == "bluetooth") "auto" else "bluetooth"
-                m.text = micLabel()
-            }
-        })
-        settingsContent.addView(micRow)
-        settingsContent.addView(text("USB-Mikrofone werden automatisch genutzt. Der Pegel erscheint während der Aufnahme oben (rot = zu laut).",
-            11f, Color.argb(170, 255, 255, 255)).apply { setPadding(0, dp(4), 0, 0) })
-
-        // ---------- Ansicht ----------
-        settingsContent.addView(text("🧭 Ansicht", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        val viewRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
-        val scrollChip = uiChip("Buttonleiste: scrollbar", !settings.topBarWrap) {}
-        val wrapChip = uiChip("Alle Buttons sichtbar", settings.topBarWrap) {}
-        fun markView() {
-            listOf(scrollChip to !settings.topBarWrap, wrapChip to settings.topBarWrap).forEach { (v, sel) ->
-                v.setBackgroundResource(if (sel) R.drawable.chip_bg_selected else R.drawable.chip_bg)
-                v.setTextColor(if (sel) Color.BLACK else Color.WHITE)
-            }
-        }
-        scrollChip.setOnClickListener { settings.topBarWrap = false; applyTopBarMode(); markView() }
-        wrapChip.setOnClickListener { settings.topBarWrap = true; applyTopBarMode(); markView() }
-        viewRow.addView(scrollChip, wrapLp())
-        viewRow.addView(wrapChip, wrapLp())
-        settingsContent.addView(viewRow)
-
-        // ---------- #15 Copyright ----------
-        settingsContent.addView(text("©️ Copyright in Fotos", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(SwitchCompat(this).apply {
-            text = "Autor und Copyright in jedes Foto schreiben"
-            setTextColor(Color.WHITE)
-            isChecked = settings.copyrightEnabled
-            setOnCheckedChangeListener { _, c -> settings.copyrightEnabled = c }
-        })
-        fun cField(hintText: String, value: String, onChange: (String) -> Unit) = EditText(this).apply {
-            setText(value); hint = hintText; setSingleLine()
-            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
-                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
-                override fun afterTextChanged(e: android.text.Editable?) { onChange(e?.toString() ?: "") }
-            })
-        }
-        settingsContent.addView(cField("Autor", settings.copyrightAuthor) { settings.copyrightAuthor = it })
-        settingsContent.addView(cField("Copyright", settings.copyrightText) { settings.copyrightText = it })
-        settingsContent.addView(text("Gilt für Fotos (EXIF). Videos speichert Android ohne Autor-Feld.",
-            11f, Color.argb(170, 255, 255, 255)))
-
-        // ---------- #10 Intro & Outro ----------
-        settingsContent.addView(text("🎬 Intro & Outro", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(SwitchCompat(this).apply {
-            text = "An jedes Video automatisch anhängen"
-            setTextColor(Color.WHITE)
-            isChecked = settings.introOutroEnabled
-            setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
-        })
-        val clipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
-        clipRow.addView(chip(if (introFile().exists()) "Intro ✓ ändern" else "Intro wählen") { pickIntro.launch("video/*") },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-        clipRow.addView(chip(if (outroFile().exists()) "Outro ✓ ändern" else "Outro wählen") { pickOutro.launch("video/*") },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-        clipRow.addView(chip("Entfernen") {
-            introFile().delete(); outroFile().delete()
-            toast("Intro und Outro entfernt")
-            buildSettings()
-        })
-        settingsContent.addView(clipRow)
-
-        // ---------- #9 Untertitel ----------
-        settingsContent.addView(text("💬 Untertitel (Deutsch, offline)", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
-        settingsContent.addView(text(
+        // 2. Untertitel
+        entry("💬 Untertitel",
             (if (settings.subtitlesEnabled) "An" else "Aus") + " · " + subModeName(settings.subtitleMode) +
-                (if (Subtitles.isModelReady(this, settings.subtitleLang)) "" else " · Sprachmodell fehlt"),
-            12f, Color.argb(200, 255, 255, 255)))
-        settingsContent.addView(chip("💬 Untertitel einstellen …") { openSubtitleEditor() },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+                (if (Subtitles.isModelReady(this, settings.subtitleLang)) "" else " · Sprachmodell fehlt")) {
+            openSubtitleEditor()
+        }
 
-        // ---------- Spenden ----------
-        settingsContent.addView(text("💛 Unterstützen", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(16), 0, 0) })
+        // 3. Mikrofon
+        entry("🎤 Mikrofon",
+            if (settings.micMode == "bluetooth") "Bluetooth-Headset" else "Automatisch (intern / USB)") {
+            openMicEditor()
+        }
+
+        // 4. Ansicht
+        entry("🧭 Ansicht", if (settings.topBarWrap) "Alle Buttons sichtbar" else "Buttonleiste scrollbar") {
+            openViewEditor()
+        }
+
+        // 5. Unterstützen
+        settingsContent.addView(text("💛 Unterstützen", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(18), 0, 0) })
         settingsContent.addView(text("MoCam ist Open Source, kostenlos und werbefrei – das Projekt lebt von Spenden.",
             12f, Color.argb(200, 255, 255, 255)))
         val donateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
@@ -1169,15 +1034,9 @@ class MainActivity : AppCompatActivity() {
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(14), 0, 0)
+            setPadding(0, dp(18), 0, 0)
         }
-        buttons.addView(chip("Zurücksetzen") {
-            settings.setFix(front, Settings.TARGET_VIDEO, 0)
-            settings.setVideoFlip(front, front)
-            applyCameraFixes()
-            buildSettings()
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
-        buttons.addView(chip("🖼 Letzte Aufnahme ansehen") { openLastMedia() },
+        buttons.addView(chip("Zurücksetzen") { confirmReset() },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
         buttons.addView(chip("✓ Fertig") { closeSettings() })
         settingsContent.addView(buttons)
@@ -1188,6 +1047,157 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(18), 0, dp(8))
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+    }
+
+    /** Lesbarer Projektname aus dem Logo-Dateinamen. */
+    private fun projectName(logo: String) =
+        logo.substringBeforeLast('.').replace('_', ' ').let { if (it.length > 28) it.take(26) + "…" else it }
+
+    /** Zurücksetzen mit Rückfrage: Ausrichtung von Logo und Videobild beider Kameras auf Standard. */
+    private fun confirmReset() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Zurücksetzen?")
+            .setMessage("Die Ausrichtung von Logo und Videobild wird für Rück- und Frontkamera auf den Standard zurückgesetzt. " +
+                "Projekte, Logos, Bauchbinden und alle anderen Einstellungen bleiben erhalten.")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Zurücksetzen") { _, _ ->
+                listOf(false, true).forEach { front ->
+                    settings.setFix(front, Settings.TARGET_VIDEO, 0)
+                    settings.setVideoFlip(front, front)
+                }
+                applyCameraFixes()
+                toast("Zurückgesetzt")
+                buildSettings()
+            }
+            .show()
+    }
+
+    // ---------------- Untermenüs ----------------
+
+    /** Projekteinstellungen: Ordner, Logo-Position, Bauchbinde, Copyright, Intro/Outro – alles je Logo. */
+    private fun openProjectEditor() {
+        openEditor("📁 Projekteinstellungen") {
+            projectEditorOpen = true
+            val logo = settings.selectedLogo
+            if (logo == null) {
+                editorContent.addView(uiText("Ein Projekt gehört immer zu einem Logo. Wähle zuerst ein Logo – " +
+                    "danach kannst du Speicherordner, Logo-Position, Bauchbinde, Copyright und Intro/Outro für dieses Projekt einstellen.",
+                    13f, Color.argb(220, 255, 255, 255)))
+                editorContent.addView(uiChip("🏷 Logo wählen …") {
+                    editorPanel.visibility = View.GONE
+                    projectEditorOpen = false
+                    logoPanelToProject = true
+                    openLogoPanel()
+                }, wrapLp(0))
+                return@openEditor
+            }
+            editorContent.addView(uiText("Projekt: ${projectName(logo)}", 15f, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
+            editorContent.addView(uiText("Anderes Logo wählen = anderes Projekt. Alles hier gilt nur für dieses Projekt.",
+                11f, Color.argb(170, 255, 255, 255)))
+
+            // Speicherort
+            uiSection("📂 Speicherort")
+            val fl = folderLabel(settings.folderForLogo(logo))
+            editorContent.addView(uiText("Fotos: Bilder/$fl · Videos: Filme/$fl · Untertitel & Marker: Download/$fl",
+                12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(uiChip("📁 Ordner: ${folderLabel(settings.folderForLogo(logo))} – ändern") { chooseFolderForLogo() }, wrapLp(0))
+
+            // Logo
+            uiSection("🏷 Logo")
+            editorContent.addView(uiText("Position, Größe und Drehung je Foto/Video und Rück-/Frontkamera.",
+                12f, Color.argb(200, 255, 255, 255)))
+            val logoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, 0) }
+            logoRow.addView(uiChip("🏷 Logo einstellen …") {
+                editorPanel.visibility = View.GONE
+                projectEditorOpen = false
+                logoPanelToProject = true
+                openLogoPanel()
+            }, wrapLp(8))
+            logoRow.addView(uiChip("Logo / Projekt wechseln …") {
+                editorPanel.visibility = View.GONE
+                projectEditorOpen = false
+                logoPanelToProject = true
+                openLogoPanel()
+            }, wrapLp(0))
+            editorContent.addView(logoRow)
+
+            // Bauchbinde
+            uiSection("🪪 Bauchbinde")
+            editorContent.addView(uiText("${settings.lowerName} · ${settings.lowerTitle}", 12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(uiChip("🪪 Bauchbinde gestalten …") {
+                projectEditorOpen = false
+                editorReturn = { openProjectEditor() }
+                openLowerThirdEditor()
+            }, wrapLp(0))
+
+            // Copyright (eigenes Untermenü)
+            uiSection("©️ Copyright")
+            editorContent.addView(uiText(
+                if (settings.copyrightEnabled) "An · ${settings.copyrightAuthor} · ${settings.copyrightText}" else "Aus",
+                12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(uiChip("©️ Copyright einstellen …") {
+                projectEditorOpen = false
+                editorReturn = { openProjectEditor() }
+                openCopyrightEditor()
+            }, wrapLp(0))
+
+            // Intro & Outro
+            uiSection("🎬 Intro & Outro")
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "An jedes Video dieses Projekts anhängen"
+                setTextColor(Color.WHITE)
+                isChecked = settings.introOutroEnabled
+                setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
+            })
+            val clipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, 0) }
+            clipRow.addView(uiChip(if (introFile().exists()) "Intro ✓ ändern" else "Intro wählen") { pickIntro.launch("video/*") }, wrapLp(6))
+            clipRow.addView(uiChip(if (outroFile().exists()) "Outro ✓ ändern" else "Outro wählen") { pickOutro.launch("video/*") }, wrapLp(6))
+            clipRow.addView(uiChip("Entfernen") {
+                introFile().delete(); outroFile().delete()
+                toast("Intro und Outro für dieses Projekt entfernt")
+                openProjectEditor()
+            }, wrapLp(0))
+            editorContent.addView(clipRow)
+        }
+    }
+
+    private fun openCopyrightEditor() {
+        openEditor("©️ Copyright") {
+            editorContent.addView(uiText("Gilt für das Projekt ${settings.selectedLogo?.let { projectName(it) } ?: "ohne Logo"}.",
+                12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "Autor und Copyright in jedes Foto schreiben"
+                setTextColor(Color.WHITE)
+                isChecked = settings.copyrightEnabled
+                setOnCheckedChangeListener { _, c -> settings.copyrightEnabled = c }
+            })
+            uiField("Autor", settings.copyrightAuthor) { settings.copyrightAuthor = it }
+            uiField("Copyright", settings.copyrightText) { settings.copyrightText = it }
+            editorContent.addView(uiText("Wird in die Foto-Metadaten (EXIF) geschrieben. Videos speichert Android ohne Autor-Feld.",
+                11f, Color.argb(170, 255, 255, 255)))
+        }
+    }
+
+    private fun openMicEditor() {
+        openEditor("🎤 Mikrofon") {
+            editorContent.addView(uiText("Erkannt: " + inputDevicesText(), 12f, Color.argb(200, 255, 255, 255)))
+            uiSection("Quelle")
+            uiChoice(listOf("Automatisch (intern / USB)", "Bluetooth-Headset"), if (settings.micMode == "bluetooth") 1 else 0) { i ->
+                settings.micMode = if (i == 1) "bluetooth" else "auto"
+            }
+            editorContent.addView(uiText("USB-Mikrofone werden automatisch genutzt. Der Pegel erscheint während der Aufnahme oben (rot = zu laut).",
+                11f, Color.argb(170, 255, 255, 255)))
+        }
+    }
+
+    private fun openViewEditor() {
+        openEditor("🧭 Ansicht") {
+            uiSection("Obere Buttonleiste")
+            uiChoice(listOf("Eine Zeile, scrollbar", "Alle Buttons sichtbar"), if (settings.topBarWrap) 1 else 0) { i ->
+                settings.topBarWrap = i == 1
+                applyTopBarMode()
+            }
+        }
     }
 
     private fun tryBind(provider: ProcessCameraProvider, selector: CameraSelector, group: UseCaseGroup): Camera? =
@@ -1603,6 +1613,7 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private var logoPanelFromSettings = false
+    private var logoPanelToProject = false
 
     private fun openLogoPanel(fromSettings: Boolean = false) {
         logoPanelFromSettings = fromSettings
@@ -1619,7 +1630,11 @@ class MainActivity : AppCompatActivity() {
     private fun closeLogoPanel() {
         logoPanel.visibility = View.GONE
         overlay.editLogo = false
-        if (logoPanelFromSettings) {
+        if (logoPanelToProject) {
+            logoPanelToProject = false
+            logoPanelFromSettings = false
+            openProjectEditor()
+        } else if (logoPanelFromSettings) {
             logoPanelFromSettings = false
             openSettings()
         } else {
@@ -1648,6 +1663,7 @@ class MainActivity : AppCompatActivity() {
         // Vorschau-Logo liegt jetzt im Bildschirm – Finger und Logo bewegen sich immer gleich
         overlay.dragFix = 0
         loadContextLogoBitmap()
+        applyLowerThird() // Bauchbinde gehört zum Projekt (Logo)
     }
 
     /** Lädt das Logo, das für dieses Register gewählt ist (jedes Register kann ein eigenes haben). */
@@ -2154,12 +2170,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var editorReturnToSettings = true
+    /** Wohin „←“/„✓“ zurückführt, wenn ein Untermenü aus einem anderen Untermenü geöffnet wurde. */
+    private var editorReturn: (() -> Unit)? = null
+    private var projectEditorOpen = false
 
     private fun closeEditor() {
         editorPanel.visibility = View.GONE
         overlay.lowerPinned = false
         overlay.subPreviewText = null
-        if (editorReturnToSettings) openSettings() else bottomPanel.visibility = View.VISIBLE
+        projectEditorOpen = false
+        val back = editorReturn
+        editorReturn = null
+        when {
+            back != null -> back()
+            editorReturnToSettings -> openSettings()
+            else -> bottomPanel.visibility = View.VISIBLE
+        }
         editorReturnToSettings = true
     }
 
@@ -2397,8 +2423,18 @@ class MainActivity : AppCompatActivity() {
     // #9 / #10 Nachbearbeitung
     // =====================================================================
 
-    private fun introFile() = File(filesDir, "intro.mp4")
-    private fun outroFile() = File(filesDir, "outro.mp4")
+    private fun introFile() = projectClip("intro")
+    private fun outroFile() = projectClip("outro")
+
+    /** Intro/Outro je Projekt; der alte gemeinsame Clip wird beim ersten Zugriff einmal übernommen. */
+    private fun projectClip(kind: String): File {
+        val f = File(filesDir, "${kind}_${settings.projectFileKey}.mp4")
+        val legacy = File(filesDir, "$kind.mp4")
+        if (!f.exists() && legacy.exists() && settings.takeLegacyClip(kind)) {
+            try { legacy.copyTo(f) } catch (e: Exception) { Log.w(TAG, "Clip übernehmen", e) }
+        }
+        return f
+    }
 
     private fun importClip(uri: Uri, target: File) {
         toast("Clip wird übernommen …")
@@ -2409,6 +2445,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 toast(if (ok) "Gespeichert" else "Clip konnte nicht geladen werden")
                 if (settingsPanel.visibility == View.VISIBLE) buildSettings()
+                if (projectEditorOpen) openProjectEditor()
             }
         }
     }
@@ -3030,6 +3067,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateFolderLabel() {
         val f = settings.folderForLogo(settings.selectedLogo)
         findViewById<TextView>(R.id.logoFolderLabel).text = "📁 Ordner: " + folderLabel(f)
+        if (projectEditorOpen) openProjectEditor()
     }
 
     private fun chooseFolderForLogo() {
