@@ -185,20 +185,40 @@
             android:visibility="gone" />
 
         <!-- #9/#10 Nachbearbeitung -->
-        <TextView
-            android:id="@+id/processingText"
+        <LinearLayout
+            android:id="@+id/processingRow"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="6dp"
-            android:background="@drawable/chip_bg"
-            android:paddingStart="12dp"
-            android:paddingTop="4dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="4dp"
-            android:textColor="#FFD54F"
-            android:textSize="13sp"
-            android:visibility="gone" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/processingText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/chip_bg"
+                android:paddingStart="12dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="4dp"
+                android:textColor="#FFD54F"
+                android:textSize="13sp" />
+            <TextView
+                android:id="@+id/btnCancelProcessing"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/chip_bg"
+                android:paddingStart="12dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="4dp"
+                android:text="✕ Abbrechen"
+                android:textColor="#FF8A80"
+                android:textSize="13sp" />
+        </LinearLayout>
 
         <!-- #17 Restaufnahmezeit und Akku -->
         <TextView

@@ -2,11 +2,16 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
+#include <atomic>
 #include "whisper.h"
 
 #define TAG "MoCamWhisper"
 
 namespace {
+std::atomic<bool> g_abort{false};
+
+bool shouldAbort(void *) { return g_abort.load(); }
+
 struct ProgressCtx {
     JNIEnv *env;
     jobject cb;
@@ -28,6 +33,12 @@ Java_com_momanufaktur_mocam_Whisper_nativeInit(JNIEnv *env, jobject, jstring pat
     env->ReleaseStringUTFChars(path, p);
     if (!ctx) __android_log_print(ANDROID_LOG_ERROR, TAG, "Modell konnte nicht geladen werden");
     return reinterpret_cast<jlong>(ctx);
+}
+
+/** Laufende Erkennung abbrechen (Nutzer hat „Abbrechen“ gedrückt). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_momanufaktur_mocam_Whisper_nativeAbort(JNIEnv *, jobject) {
+    g_abort.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -66,6 +77,9 @@ Java_com_momanufaktur_mocam_Whisper_nativeTranscribe(JNIEnv *env, jobject, jlong
     wp.max_len = 42;
     wp.split_on_word = true;
     if (pr && pr[0]) wp.initial_prompt = pr;
+    g_abort.store(false);
+    wp.abort_callback = shouldAbort;
+    wp.abort_callback_user_data = nullptr;
 
     ProgressCtx pc{env, progress, nullptr};
     if (progress) {

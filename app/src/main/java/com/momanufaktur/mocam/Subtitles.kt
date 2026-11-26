@@ -31,6 +31,9 @@ object Subtitles {
     /** Sprachen: "de" Deutsch, "en-gb" Englisch (UK), "en-us" Englisch (US). */
     val LANGUAGES = listOf("de" to "Deutsch", "en-gb" to "English (UK)", "en-us" to "English (US)")
 
+    /** Wird beim Abbrechen gesetzt; die Erkennung bricht dann beim nächsten Audio-Stück ab. */
+    @Volatile var cancelRequested = false
+
     /** Erkennungs-Engines: Whisper (genauer, mit Satzzeichen) oder das alte Vosk. */
     val ENGINES = listOf(
         "whisper-base" to "⚡ Whisper Schnell",
@@ -109,7 +112,11 @@ object Subtitles {
         if (!model.exists()) return emptyList()
         // Ton als 16-kHz-Mono-PCM einsammeln und in Gleitkommazahlen umwandeln
         val raw = java.io.ByteArrayOutputStream()
-        val hasAudio = AudioPcm.decode(ctx, video) { bytes, len -> raw.write(bytes, 0, len) }
+        val hasAudio = AudioPcm.decode(ctx, video) { bytes, len ->
+            if (cancelRequested) throw java.util.concurrent.CancellationException()
+            if (cancelRequested) throw java.util.concurrent.CancellationException()
+            raw.write(bytes, 0, len)
+        }
         if (!hasAudio || raw.size() < 3200) return emptyList()
         val b = raw.toByteArray()
         val pcm = FloatArray(b.size / 2) { i ->
@@ -121,8 +128,10 @@ object Subtitles {
             lang.startsWith("en") -> "Glossary: " + words.joinToString(", ") + "."
             else -> "Begriffe: " + words.joinToString(", ") + "."
         }
+        if (cancelRequested) throw java.util.concurrent.CancellationException()
         val segs = Whisper.transcribe(model.absolutePath, pcm, if (lang.startsWith("en")) "en" else "de", initial,
             threads = 4, beam = 1, progress = { p -> onProgress(p) })
+        if (cancelRequested) throw java.util.concurrent.CancellationException()
         val caps = segs
             .filter { s -> HALLUCINATIONS.none { s.text.lowercase().contains(it) } }
             .filter { s -> s.text.any { it.isLetterOrDigit() } }

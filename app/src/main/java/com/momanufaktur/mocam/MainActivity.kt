@@ -249,10 +249,16 @@ class MainActivity : AppCompatActivity() {
         post = PostProcessor(this).apply {
             onStatus = { msg ->
                 processingText.text = msg ?: ""
-                processingText.visibility = if (msg == null) View.GONE else View.VISIBLE
+                findViewById<View>(R.id.processingRow).visibility = if (msg == null) View.GONE else View.VISIBLE
             }
             onDone = { uri, msg ->
                 if (uri != null) setLastMedia(uri, true)
+                if (msg?.startsWith("Abgebrochen") == true) {
+                    // gelöschtes Video nicht mehr als letzte Aufnahme anzeigen
+                    lastMediaUri = null
+                    galleryThumb.setImageDrawable(null)
+                    shareBar.visibility = View.GONE
+                }
                 msg?.let { toast(it) }
             }
         }
@@ -353,6 +359,14 @@ class MainActivity : AppCompatActivity() {
         btnVoice = findViewById(R.id.btnVoice)
         statusText = findViewById(R.id.statusText)
         processingText = findViewById(R.id.processingText)
+        findViewById<View>(R.id.btnCancelProcessing).setOnClickListener {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Bearbeitung abbrechen?")
+                .setMessage("Die Bearbeitung wird gestoppt und das gesamte Video wird gelöscht. Das lässt sich nicht rückgängig machen.")
+                .setNegativeButton("Weiter bearbeiten", null)
+                .setPositiveButton("Abbrechen & löschen") { _, _ -> post.cancelCurrent() }
+                .show()
+        }
         audioLevel = findViewById(R.id.audioLevel)
         shareBar = findViewById(R.id.shareBar)
         shareButtons = findViewById(R.id.shareButtons)
@@ -543,7 +557,11 @@ class MainActivity : AppCompatActivity() {
         btnLimit.setOnClickListener {
             if (recording != null) return@setOnClickListener
             settings.timeLimit = when (settings.timeLimit) { 0 -> 15; 15 -> 30; 30 -> 60; 60 -> 90; else -> 0 }
-            if (settings.timeLimit > 0) toast("Video stoppt automatisch nach ${settings.timeLimit} s")
+            if (settings.timeLimit > 0) {
+                val cut = introOutroSeconds()
+                toast(if (cut > 0) "Endvideo ${settings.timeLimit} s: Aufnahme stoppt nach ${effectiveLimit()} s (Intro/Outro ${cut} s)"
+                      else "Video stoppt automatisch nach ${settings.timeLimit} s")
+            }
             updateUi()
         }
         findViewById<View>(R.id.btnLogoFolder).setOnClickListener { chooseFolderForLogo() }
@@ -1189,12 +1207,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Kleiner Player für Intro/Outro. */
-    private fun playClip(file: File, title: String) {
+    private fun playClip(file: File, title: String) = playVideo(Uri.fromFile(file), title, dp(320))
+
+    /** Kleiner Video-Player im Dialog (für Intro/Outro und die Galerie). */
+    private fun playVideo(uri: Uri, title: String, height: Int = (resources.displayMetrics.heightPixels * 0.6f).toInt()) {
         val video = android.widget.VideoView(this)
         val box = android.widget.FrameLayout(this).apply {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             addView(video, android.widget.FrameLayout.LayoutParams(
-                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, dp(320), Gravity.CENTER))
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, height, Gravity.CENTER))
         }
         val dlg = MaterialAlertDialogBuilder(this)
             .setTitle("▶ $title")
@@ -1203,9 +1224,9 @@ class MainActivity : AppCompatActivity() {
             .create()
         dlg.setOnDismissListener { video.stopPlayback() }
         video.setMediaController(android.widget.MediaController(this).also { it.setAnchorView(video) })
-        video.setVideoURI(Uri.fromFile(file))
+        video.setVideoURI(uri)
         video.setOnPreparedListener { video.start() }
-        video.setOnErrorListener { _, _, _ -> toast("Clip kann nicht abgespielt werden"); true }
+        video.setOnErrorListener { _, _, _ -> toast("Video kann nicht abgespielt werden"); true }
         dlg.show()
     }
 
@@ -1642,6 +1663,7 @@ class MainActivity : AppCompatActivity() {
                 is VideoRecordEvent.Start -> {
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
                     if (settings.lowerEnabled) startLowerThird()
+                    playLogoAnimation() // animiertes Logo: einmal abspielen, dann Startbild
                     if (prompterActive()) prompterView.playing = true
                     updateUi()
                 }
@@ -1658,7 +1680,7 @@ class MainActivity : AppCompatActivity() {
                 is VideoRecordEvent.Status -> {
                     lastRecordedNs = event.recordingStats.recordedDurationNanos
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
-                    val limit = settings.timeLimit
+                    val limit = effectiveLimit()
                     recIndicator.text = if (limit > 0) {
                         val left = (limit - s).coerceAtLeast(0)
                         String.format("%s %02d:%02d · noch %d s", if (isPaused) "❚❚" else "●", s / 60, s % 60, left)
@@ -1946,6 +1968,16 @@ class MainActivity : AppCompatActivity() {
                     val file = File(logoDir(), "logo_${System.currentTimeMillis()}.png")
                     file.outputStream().use { result.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     savedName = file.name
+                    // Animiertes GIF: Original zusätzlich aufheben (erstes Bild = PNG oben)
+                    val head = ByteArray(6)
+                    contentResolver.openInputStream(uri)?.use { it.read(head) }
+                    if (String(head, Charsets.US_ASCII).startsWith("GIF8")) {
+                        val gif = File(logoDir(), file.nameWithoutExtension + ".gif")
+                        contentResolver.openInputStream(uri)?.use { inp -> gif.outputStream().use { inp.copyTo(it) } }
+                        @Suppress("DEPRECATION")
+                        val movie = try { android.graphics.Movie.decodeFile(gif.path) } catch (_: Throwable) { null }
+                        if (movie == null || movie.duration() <= 0) gif.delete()  // nur ein Einzelbild
+                    }
                     result
                 }
             } catch (e: Exception) {
@@ -1961,7 +1993,10 @@ class MainActivity : AppCompatActivity() {
                     applyLogo(bmp)
                     enableLogo()
                     refreshLogoLibrary()
-                    toast("Logo gespeichert – jetzt im Bild platzieren.")
+                    if (gifFor(savedName) != null) {
+                        toast("Animiertes Logo: spielt beim Start jeder Videoaufnahme einmal ab, danach bleibt das Startbild.")
+                        playLogoAnimation()
+                    } else toast("Logo gespeichert – jetzt im Bild platzieren.")
                 }
             }
         }
@@ -1978,6 +2013,7 @@ class MainActivity : AppCompatActivity() {
                 settings.selectedLogo = file.name
                 loadedLogoName = file.name
                 applyLogo(bmp)
+                playLogoAnimation()
                 updateFolderLabel()
                 enableLogo()
                 refreshLogoLibrary()
@@ -1993,6 +2029,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Löschen") { _, _ ->
                 val wasSelected = file.name == settings.selectedLogo
                 file.delete()
+                gifFor(file.name)?.delete()
                 if (wasSelected) {
                     val next = libraryFiles().firstOrNull()
                     if (next != null) {
@@ -2058,6 +2095,80 @@ class MainActivity : AppCompatActivity() {
                 logoLibrary.addView(add, LinearLayout.LayoutParams(size, size))
             }
         }
+    }
+
+    // ---------------- Animiertes Logo (GIF) ----------------
+    // Beim Import eines GIF wird das erste Bild als PNG (normales Logo) und das GIF daneben gespeichert.
+    // Zu Beginn jeder Videoaufnahme läuft die Animation einmal durch, danach bleibt das Startbild stehen.
+
+    private fun gifFor(name: String?): File? =
+        name?.let { File(logoDir(), it.substringBeforeLast('.') + ".gif") }?.takeIf { it.exists() }
+
+    @Suppress("DEPRECATION") private var animMovie: android.graphics.Movie? = null
+    private var animName: String? = null
+    private var animStart = 0L
+    private val animBufs = arrayOfNulls<Bitmap>(3)
+    private var animBufIdx = 0
+    private val animHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    @Suppress("DEPRECATION")
+    private val animTick = object : Runnable {
+        override fun run() {
+            val movie = animMovie
+            val base = logoOriginal
+            if (movie == null || base == null || animName != settings.selectedLogo || !settings.logoEnabled) {
+                stopLogoAnimation(); return
+            }
+            val t = android.os.SystemClock.uptimeMillis() - animStart
+            if (t >= movie.duration()) { stopLogoAnimation(); return }
+            // Ziel-Größe: Seitenverhältnis des Startbilds, max. 512 px (schnelleres Hochladen)
+            val sc = minOf(1f, 512f / max(base.width, base.height))
+            val tw = (base.width * sc).roundToInt().coerceAtLeast(1)
+            val th = (base.height * sc).roundToInt().coerceAtLeast(1)
+            animBufIdx = (animBufIdx + 1) % animBufs.size
+            var buf = animBufs[animBufIdx]
+            if (buf == null || buf.width != tw || buf.height != th) {
+                buf = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888); animBufs[animBufIdx] = buf
+            }
+            buf!!.eraseColor(Color.TRANSPARENT)
+            val c = android.graphics.Canvas(buf)
+            c.scale(tw.toFloat() / movie.width().coerceAtLeast(1), th.toFloat() / movie.height().coerceAtLeast(1))
+            movie.setTime(t.toInt())
+            movie.draw(c, 0f, 0f)
+            val deg = settings.logoRotation
+            val frame = if (deg == 0) buf else Bitmap.createBitmap(buf, 0, 0, tw, th,
+                android.graphics.Matrix().apply { postRotate(deg.toFloat()) }, true)
+            processor.setLogo(frame)
+            videoProcessor.setLogo(frame)
+            overlay.logoBitmap = frame
+            animHandler.postDelayed(this, 50)
+        }
+    }
+
+    /** Spielt das animierte Logo des Projekts einmal ab (kein GIF → nichts passiert). */
+    @Suppress("DEPRECATION")
+    private fun playLogoAnimation() {
+        val name = settings.selectedLogo
+        val gif = gifFor(name) ?: return
+        if (!settings.logoEnabled || logoOriginal == null) return
+        animHandler.removeCallbacks(animTick)
+        bg.execute {
+            val movie = if (animName == name && animMovie != null) animMovie
+                else try { android.graphics.Movie.decodeFile(gif.path) } catch (_: Throwable) { null }
+            runOnUiThread {
+                if (movie == null || movie.duration() <= 0 || settings.selectedLogo != name) return@runOnUiThread
+                animMovie = movie
+                animName = name
+                animStart = android.os.SystemClock.uptimeMillis()
+                animTick.run()
+            }
+        }
+    }
+
+    private fun stopLogoAnimation() {
+        animHandler.removeCallbacks(animTick)
+        // Startbild wieder anzeigen (volle Auflösung)
+        logoOriginal?.let { applyLogo(it) }
     }
 
     /** Übernimmt ein Logo und dreht es um die gespeicherte Drehung (gilt für Video, Vorschau und Fotos). */
@@ -2141,9 +2252,24 @@ class MainActivity : AppCompatActivity() {
     // Letzte Aufnahmen (in der App) – erneut teilen
     // =====================================================================
 
-    private data class RecentItem(val uri: Uri, val isVideo: Boolean, val date: Long)
+    /** folder = Projektordner unter MoCam ("" = direkt in MoCam). */
+    private data class RecentItem(val uri: Uri, val isVideo: Boolean, val date: Long, val folder: String = "")
 
-    private fun queryRecent(limit: Int = 45): List<RecentItem> {
+    /** Projektordner aus dem Speicherpfad lesen: …/MoCam/<Ordner>/… */
+    private fun folderOf(path: String?): String {
+        if (path == null) return ""
+        val i = path.indexOf(MediaStoreUtil.FOLDER + "/")
+        if (i < 0) return ""
+        val rest = path.substring(i + MediaStoreUtil.FOLDER.length + 1)
+        val seg = rest.substringBefore('/')
+        // Ohne weiteren Schrägstrich ist der Rest der Dateiname (vor Android 10) bzw. leer
+        return if (rest.contains('/')) seg else ""
+    }
+
+    private var recentType = 0          // 0 = alle, 1 = Fotos, 2 = Videos
+    private var recentFolder: String? = null  // null = alle Projekte
+
+    private fun queryRecent(limit: Int = 300): List<RecentItem> {
         val out = mutableListOf<RecentItem>()
         listOf(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
@@ -2154,11 +2280,16 @@ class MainActivity : AppCompatActivity() {
             else
                 "${MediaStore.MediaColumns.DATA} LIKE ?" to arrayOf("%/${MediaStoreUtil.FOLDER}/%")
             try {
-                contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED),
+                val pathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.MediaColumns.RELATIVE_PATH
+                    else MediaStore.MediaColumns.DATA
+                contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED, pathCol),
                     sel, args, "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { c ->
                     var n = 0
                     while (c.moveToNext() && n < limit) {
-                        out += RecentItem(android.content.ContentUris.withAppendedId(collection, c.getLong(0)), isVideo, c.getLong(1))
+                        val path = c.getString(2).let { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) it else it }
+                        // RELATIVE_PATH endet mit "/", daher dort einen Platzhalter anhängen
+                        val folder = folderOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) (path ?: "") + "x" else path)
+                        out += RecentItem(android.content.ContentUris.withAppendedId(collection, c.getLong(0)), isVideo, c.getLong(1), folder)
                         n++
                     }
                 }
@@ -2185,17 +2316,69 @@ class MainActivity : AppCompatActivity() {
         actions.addView(actionRow)
         recentContent.addView(actions)
 
+        // Filter: Art (Alle/Fotos/Videos) und Projekt (Ordner)
+        val typeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+        recentContent.addView(typeRow)
+        val folderScroll = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val folderRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, 0) }
+        folderScroll.addView(folderRow)
+        recentContent.addView(folderScroll)
+
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
         recentContent.addView(grid)
         recentPanel.visibility = View.VISIBLE
 
         bg.execute {
-            val items = queryRecent()
+            val all = queryRecent()
             runOnUiThread {
-                if (items.isEmpty()) {
+                if (all.isEmpty()) {
                     info.text = "Noch keine Aufnahmen in MoCam gefunden."
                     return@runOnUiThread
                 }
+                val folders = all.map { it.folder }.distinct().sortedBy { it.lowercase() }
+                if (recentFolder != null && recentFolder !in folders) recentFolder = null
+                fun styleChip(v: TextView, on: Boolean) {
+                    v.setBackgroundResource(if (on) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+                    v.setTextColor(if (on) Color.BLACK else Color.WHITE)
+                }
+                lateinit var fill: () -> Unit
+                fun buildFilters() {
+                    typeRow.removeAllViews()
+                    listOf("Alle", "📷 Fotos", "🎥 Videos").forEachIndexed { i, label ->
+                        val c = uiChip(label) { recentType = i; buildFilters(); fill() }
+                        styleChip(c, recentType == i)
+                        typeRow.addView(c, wrapLp(6))
+                    }
+                    folderRow.removeAllViews()
+                    folderScroll.visibility = if (folders.size > 1) View.VISIBLE else View.GONE
+                    val allC = uiChip("Alle Projekte") { recentFolder = null; buildFilters(); fill() }
+                    styleChip(allC, recentFolder == null)
+                    folderRow.addView(allC, wrapLp(6))
+                    folders.forEach { f ->
+                        val c = uiChip("📁 " + f.ifEmpty { "MoCam (ohne Projekt)" }) { recentFolder = f; buildFilters(); fill() }
+                        styleChip(c, recentFolder == f)
+                        folderRow.addView(c, wrapLp(6))
+                    }
+                }
+                fill = {
+                    grid.removeAllViews()
+                    actions.visibility = View.GONE
+                    val items = all.filter {
+                        (recentType == 0 || (recentType == 2) == it.isVideo) && (recentFolder == null || it.folder == recentFolder)
+                    }.take(90)
+                    info.text = if (items.isEmpty()) "Keine Aufnahmen für diesen Filter."
+                        else "${items.size} Aufnahmen · Tippen = teilen, ▶ = abspielen"
+                    fillRecentGrid(grid, items, info, actions, actionRow)
+                }
+                buildFilters()
+                fill()
+            }
+        }
+    }
+
+    private fun fillRecentGrid(grid: LinearLayout, items: List<RecentItem>, info: TextView,
+                               actions: View, actionRow: LinearLayout) {
+            run {
                 val cell = (resources.displayMetrics.widthPixels - dp(24) - dp(8) * 2) / 3
                 var row: LinearLayout? = null
                 val frames = mutableListOf<View>()
@@ -2210,7 +2393,20 @@ class MainActivity : AppCompatActivity() {
                         setBackgroundColor(Color.DKGRAY)
                     }
                     frame.addView(iv, android.widget.FrameLayout.LayoutParams(cell, cell))
-                    if (item.isVideo) frame.addView(uiText("▶", 18f).apply { setPadding(dp(6), dp(2), 0, 0) })
+                    if (item.isVideo) {
+                        // Aktiver Abspielknopf oben links
+                        val play = TextView(this).apply {
+                            text = "▶"
+                            textSize = 16f
+                            gravity = Gravity.CENTER
+                            setTextColor(Color.WHITE)
+                            setBackgroundResource(R.drawable.round_btn)
+                            setOnClickListener { playVideo(item.uri, "Video abspielen") }
+                        }
+                        frame.addView(play, android.widget.FrameLayout.LayoutParams(dp(40), dp(40)).apply {
+                            leftMargin = dp(4); topMargin = dp(4)
+                        })
+                    }
                     frame.setOnClickListener {
                         frames.forEach { it.setBackgroundColor(Color.TRANSPARENT) }
                         frame.setBackgroundColor(getColor(R.color.accent))
@@ -2241,7 +2437,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        }
     }
 
     // =====================================================================
@@ -2516,6 +2711,22 @@ class MainActivity : AppCompatActivity() {
                 "whisper-small" -> "Whisper Genau: beste Erkennung, mit Satzzeichen und Großschreibung. Dauert etwa 2–4× so lange wie das Video."
                 else -> "Vosk: schnell, aber ungenauer und ohne Satzzeichen."
             }, 11f, Color.argb(170, 255, 255, 255)))
+            // Dauer: gemessene Werte der letzten Bearbeitung
+            run {
+                val st = getSharedPreferences("mocam_stats", MODE_PRIVATE)
+                val v = st.getFloat("videoSec", 0f)
+                val rec = st.getLong("recognizeMs", 0L) / 1000
+                val exp = st.getLong("exportMs", 0L) / 1000
+                val measured = if (v > 0f && (rec > 0 || exp > 0))
+                    "Letzte Messung: Video ${v.roundToInt()} s → Erkennung $rec s, Einbrennen/Bearbeiten $exp s."
+                else "Noch keine Messung – nach dem nächsten Video mit Untertiteln steht hier, wie lange es gedauert hat."
+                editorContent.addView(uiText(
+                    "⏱ Nach der Aufnahme laufen zwei Schritte: 1. Spracherkennung, 2. Einbrennen – dabei wird das ganze Video " +
+                        "neu berechnet. Beides zusammen kann etwa so lange dauern wie das Video selbst oder länger. $measured\n" +
+                        "Schneller: „⚡ Whisper Schnell“ wählen oder nur „.srt-Datei“ (ohne Einbrennen). Während der Aufnahme geht es " +
+                        "leider nicht, weil Android das Mikrofon dann exklusiv der Aufnahme gibt.",
+                    11f, Color.rgb(255, 213, 79)))
+            }
             if (engine.startsWith("whisper") && !Whisper.available) editorContent.addView(uiText(
                 "⚠ Whisper läuft auf diesem Gerät nicht – bitte Vosk wählen.", 12f, Color.rgb(255, 160, 80)))
 
@@ -2549,6 +2760,34 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
     // #9 / #10 Nachbearbeitung
     // =====================================================================
+
+    private val clipDurCache = HashMap<String, Pair<Long, Int>>()
+
+    /** Länge eines Clips in ganzen Sekunden (zwischengespeichert, bis sich die Datei ändert). */
+    private fun clipSeconds(f: File): Int {
+        if (!f.exists()) return 0
+        clipDurCache[f.path]?.let { (mod, sec) -> if (mod == f.lastModified()) return sec }
+        val sec = try {
+            val r = android.media.MediaMetadataRetriever()
+            r.setDataSource(f.path)
+            val ms = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            r.release()
+            Math.round(ms / 1000.0).toInt()
+        } catch (e: Exception) { 0 }
+        clipDurCache[f.path] = f.lastModified() to sec
+        return sec
+    }
+
+    /** Sekunden, die Intro und Outro des Projekts zum fertigen Video beitragen. */
+    private fun introOutroSeconds(): Int =
+        if (!settings.introOutroEnabled) 0 else clipSeconds(introFile()) + clipSeconds(outroFile())
+
+    /** Aufnahme-Limit so, dass das fertige Video (mit Intro/Outro) genau das eingestellte Limit hat. */
+    private fun effectiveLimit(): Int {
+        val l = settings.timeLimit
+        if (l <= 0) return 0
+        return (l - introOutroSeconds()).coerceAtLeast(3)
+    }
 
     private fun introFile() = projectClip("intro")
     private fun outroFile() = projectClip("outro")
@@ -3591,7 +3830,11 @@ class MainActivity : AppCompatActivity() {
             else -> "⚡ Blitz aus"
         }
         btnTimer.text = if (settings.timer == 0) "⏱ Timer aus" else "⏱ ${settings.timer}s"
-        btnLimit.text = if (settings.timeLimit == 0) "⏳ Limit aus" else "⏳ ${settings.timeLimit}s"
+        btnLimit.text = when {
+            settings.timeLimit == 0 -> "⏳ Limit aus"
+            introOutroSeconds() > 0 -> "⏳ ${settings.timeLimit}s (Aufnahme ${effectiveLimit()}s)"
+            else -> "⏳ ${settings.timeLimit}s"
+        }
         btnLimit.visibility = if (videoMode) View.VISIBLE else View.GONE
         btnFps.text = if (settings.fps == 0) "🎞 fps auto" else "🎞 ${settings.fps} fps"
         btnFps.visibility = if (videoMode) View.VISIBLE else View.GONE

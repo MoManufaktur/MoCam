@@ -55,6 +55,11 @@ class PostProcessor(private val ctx: Context) {
     private val bg = Executors.newSingleThreadExecutor()
     private val queue = ArrayDeque<Job>()
     private var busy = false
+    private var current: Job? = null
+    private var currentTransformer: Transformer? = null
+    @Volatile private var cancelled = false
+    private var tRecognizeMs = 0L
+    private var tStart = 0L
 
     val isBusy get() = busy
 
@@ -63,30 +68,74 @@ class PostProcessor(private val ctx: Context) {
         if (!busy) next()
     }
 
+    /**
+     * Laufende Bearbeitung abbrechen und das Video komplett löschen (Original und Zwischenstände).
+     * Muss auf dem Hauptthread aufgerufen werden.
+     */
+    fun cancelCurrent() {
+        val job = current ?: return
+        cancelled = true
+        Subtitles.cancelRequested = true
+        Whisper.abort()
+        currentTransformer?.let { try { it.cancel() } catch (_: Exception) { } }
+        currentTransformer = null
+        stopProgress()
+        bg.execute {
+            try { ctx.contentResolver.delete(job.input, null, null) } catch (e: Exception) { Log.w(TAG, "Löschen", e) }
+            main.post {
+                onDone?.invoke(null, "Abgebrochen – Video gelöscht")
+                finishJob()
+            }
+        }
+    }
+
+    private fun finishJob() {
+        current = null
+        currentTransformer = null
+        next()
+    }
+
     private fun next() {
         val job = queue.removeFirstOrNull()
+        current = job
+        cancelled = false
+        Subtitles.cancelRequested = false
         if (job == null) {
             busy = false
             onStatus?.invoke(null)
             return
         }
         busy = true
+        tStart = System.currentTimeMillis()
+        tRecognizeMs = 0L
         if (job.subtitles) {
             onStatus?.invoke("💬 Untertitel werden erkannt …")
             bg.execute {
                 val caps = try {
                     Subtitles.recognize(ctx, job.input, job.subLang, job.subEngine, job.subWords) { p ->
-                        main.post { onStatus?.invoke("💬 Untertitel werden erkannt … $p %") }
+                        main.post { if (!cancelled) onStatus?.invoke("💬 Untertitel werden erkannt … $p %") }
                     }
                 } catch (t: Throwable) {
-                    Log.e(TAG, "Spracherkennung", t)
+                    if (!cancelled) Log.e(TAG, "Spracherkennung", t)
                     emptyList()
                 }
-                main.post { export(job, caps) }
+                tRecognizeMs = System.currentTimeMillis() - tStart
+                main.post { if (!cancelled && current === job) export(job, caps) }
             }
         } else {
             export(job, emptyList())
         }
+    }
+
+    /** Dauer der letzten Bearbeitung merken (für den Hinweis in den Untertitel-Einstellungen). */
+    private fun saveTiming(job: Job, exportMs: Long) {
+        val video = try { durationSec(job.input) } catch (_: Exception) { 0.0 }
+        ctx.getSharedPreferences("mocam_stats", android.content.Context.MODE_PRIVATE).edit()
+            .putFloat("videoSec", video.toFloat())
+            .putLong("recognizeMs", tRecognizeMs)
+            .putLong("exportMs", exportMs)
+            .putString("engine", if (job.subtitles) job.subEngine else "")
+            .apply()
     }
 
     private fun export(job: Job, captions: List<Caption>) {
@@ -103,10 +152,12 @@ class PostProcessor(private val ctx: Context) {
                 }
                 main.post { onDone?.invoke(null, if (ok) "Untertitel als .srt gespeichert (Download/MoCam)" else "SRT konnte nicht gespeichert werden") }
             }
-            next()
+            saveTiming(job, 0L)
+            finishJob()
             return
         }
         onStatus?.invoke("🎬 Video wird bearbeitet …")
+        val tExport = System.currentTimeMillis()
 
         // Größe des Hauptvideos – Intro/Outro werden darauf angepasst
         val (w, h) = videoSize(job.input)
@@ -133,7 +184,10 @@ class PostProcessor(private val ctx: Context) {
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     stopProgress()
+                    if (cancelled) { outFile.delete(); return }
+                    val exportMs = System.currentTimeMillis() - tExport
                     bg.execute {
+                        saveTiming(job, exportMs)
                         val uri = try { saveToGallery(outFile, job) } catch (t: Throwable) {
                             Log.e(TAG, "Speichern", t); null
                         }
@@ -144,25 +198,33 @@ class PostProcessor(private val ctx: Context) {
                             }
                         }
                         outFile.delete()
+                        if (cancelled) {
+                            // Während des Speicherns abgebrochen: neues Video auch wieder löschen
+                            uri?.let { try { ctx.contentResolver.delete(it, null, null) } catch (_: Exception) { } }
+                            return@execute
+                        }
                         if (uri != null) {
                             try { ctx.contentResolver.delete(job.input, null, null) } catch (_: Exception) { }
                         }
                         main.post {
-                            onDone?.invoke(uri, if (uri != null) "Video fertig bearbeitet" else "Speichern fehlgeschlagen – Original bleibt")
-                            next()
+                            val took = if (tRecognizeMs > 0) " (Untertitel ${tRecognizeMs / 1000} s, Bearbeiten ${exportMs / 1000} s)" else ""
+                            onDone?.invoke(uri, if (uri != null) "Video fertig bearbeitet$took" else "Speichern fehlgeschlagen – Original bleibt")
+                            finishJob()
                         }
                     }
                 }
 
                 override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
-                    Log.e(TAG, "Export", exportException)
                     stopProgress()
                     outFile.delete()
+                    if (cancelled) return
+                    Log.e(TAG, "Export", exportException)
                     onDone?.invoke(null, "Bearbeitung fehlgeschlagen – Original bleibt erhalten")
-                    next()
+                    finishJob()
                 }
             })
             .build()
+        currentTransformer = transformer
         transformer.start(composition, outFile.absolutePath)
         startProgress(transformer)
     }

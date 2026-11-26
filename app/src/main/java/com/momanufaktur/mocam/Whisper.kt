@@ -22,6 +22,12 @@ object Whisper {
 
     private external fun nativeInit(modelPath: String): Long
     private external fun nativeFree(ctx: Long)
+    private external fun nativeAbort()
+
+    /** Bricht eine laufende Erkennung ab (sicher aus jedem Thread). */
+    fun abort() {
+        if (available) try { nativeAbort() } catch (_: Throwable) { }
+    }
     private external fun nativeTranscribe(
         ctx: Long, pcm: FloatArray, lang: String, prompt: String?, threads: Int, beam: Int, progress: WhisperProgress?
     ): ByteArray
