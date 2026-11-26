@@ -53,7 +53,7 @@ Java_com_momanufaktur_mocam_Whisper_nativeFree(JNIEnv *, jobject, jlong ptr) {
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_momanufaktur_mocam_Whisper_nativeTranscribe(JNIEnv *env, jobject, jlong ptr, jfloatArray pcm,
                                                     jstring lang, jstring prompt, jint threads,
-                                                    jint beam, jobject progress) {
+                                                    jint beam, jstring vadPath, jobject progress) {
     auto *ctx = reinterpret_cast<whisper_context *>(ptr);
     if (!ctx) return env->NewByteArray(0);
 
@@ -77,6 +77,16 @@ Java_com_momanufaktur_mocam_Whisper_nativeTranscribe(JNIEnv *env, jobject, jlong
     wp.max_len = 42;
     wp.split_on_word = true;
     if (pr && pr[0]) wp.initial_prompt = pr;
+
+    // Sprechpausen überspringen: Silero-VAD schneidet Stille heraus, Zeiten werden zurückgerechnet
+    const char *vp = vadPath ? env->GetStringUTFChars(vadPath, nullptr) : nullptr;
+    if (vp && vp[0]) {
+        wp.vad = true;
+        wp.vad_model_path = vp;
+        wp.vad_params = whisper_vad_default_params();
+        wp.vad_params.min_silence_duration_ms = 300;
+        wp.vad_params.speech_pad_ms = 200;
+    }
     g_abort.store(false);
     wp.abort_callback = shouldAbort;
     wp.abort_callback_user_data = nullptr;
@@ -111,6 +121,7 @@ Java_com_momanufaktur_mocam_Whisper_nativeTranscribe(JNIEnv *env, jobject, jlong
 
     env->ReleaseStringUTFChars(lang, l);
     if (pr) env->ReleaseStringUTFChars(prompt, pr);
+    if (vp) env->ReleaseStringUTFChars(vadPath, vp);
     // Als Bytes zurückgeben (UTF-8), damit ungewöhnliche Zeichen JNI nicht zum Absturz bringen
     jbyteArray arr = env->NewByteArray((jsize) out.size());
     env->SetByteArrayRegion(arr, 0, (jsize) out.size(), reinterpret_cast<const jbyte *>(out.data()));

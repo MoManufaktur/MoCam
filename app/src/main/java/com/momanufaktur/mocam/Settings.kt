@@ -164,6 +164,11 @@ class Settings(ctx: Context) {
         get() = p.getString("sub_engine", "whisper-small") ?: "whisper-small"
         set(v) = p.edit().putString("sub_engine", v).apply()
 
+    /** Whisper: Sprechpausen überspringen (schneller) */
+    var subtitleSkipPauses: Boolean
+        get() = bool("sub_vad", true)
+        set(v) = p.edit().putBoolean("sub_vad", v).apply()
+
     /** Wortliste des Projekts (Namen, Fachbegriffe) für die Untertitel-Erkennung */
     var subtitleWords: String
         get() = pS("subWords", "")

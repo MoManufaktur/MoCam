@@ -2711,6 +2711,18 @@ class MainActivity : AppCompatActivity() {
                 "whisper-small" -> "Whisper Genau: beste Erkennung, mit Satzzeichen und Großschreibung. Dauert etwa 2–4× so lange wie das Video."
                 else -> "Vosk: schnell, aber ungenauer und ohne Satzzeichen."
             }, 11f, Color.argb(170, 255, 255, 255)))
+            if (engine.startsWith("whisper")) {
+                editorContent.addView(SwitchCompat(this).apply {
+                    text = "⏩ Sprechpausen überspringen (schneller)"
+                    setTextColor(Color.WHITE)
+                    isChecked = settings.subtitleSkipPauses
+                    setOnCheckedChangeListener { _, c -> settings.subtitleSkipPauses = c }
+                })
+                editorContent.addView(uiText("Stille und Pausen werden vor der Erkennung herausgeschnitten – je mehr Pausen, " +
+                    "desto schneller. Die Zeiten der Untertitel bleiben passend. Braucht einmalig ein kleines Zusatzmodell (ca. 1 MB).",
+                    11f, Color.argb(170, 255, 255, 255)))
+            }
+
             // Dauer: gemessene Werte der letzten Bearbeitung
             run {
                 val st = getSharedPreferences("mocam_stats", MODE_PRIVATE)
@@ -2830,7 +2842,7 @@ class MainActivity : AppCompatActivity() {
         if (!subs && intro == null && outro == null) return false
         post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro,
             settings.subtitleMode, settings.subtitleStyle, settings.subtitleLang,
-            settings.subtitleEngine, settings.subtitleWords))
+            settings.subtitleEngine, settings.subtitleWords, settings.subtitleSkipPauses))
         toast("Video gespeichert – wird jetzt bearbeitet")
         return true
     }

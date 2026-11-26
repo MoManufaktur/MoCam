@@ -29,7 +29,8 @@ object Whisper {
         if (available) try { nativeAbort() } catch (_: Throwable) { }
     }
     private external fun nativeTranscribe(
-        ctx: Long, pcm: FloatArray, lang: String, prompt: String?, threads: Int, beam: Int, progress: WhisperProgress?
+        ctx: Long, pcm: FloatArray, lang: String, prompt: String?, threads: Int, beam: Int, vadPath: String?,
+        progress: WhisperProgress?
     ): ByteArray
 
     /** Ein erkannter Block: Start/Ende in Sekunden und Text. */
@@ -37,13 +38,13 @@ object Whisper {
 
     fun transcribe(
         modelPath: String, pcm: FloatArray, lang: String, prompt: String?,
-        threads: Int = 4, beam: Int = 1, progress: WhisperProgress? = null
+        threads: Int = 4, beam: Int = 1, vadPath: String? = null, progress: WhisperProgress? = null
     ): List<Segment> {
         check(available) { "Whisper ist auf diesem Gerät nicht verfügbar" }
         val ctx = nativeInit(modelPath)
         check(ctx != 0L) { "Whisper-Modell konnte nicht geladen werden" }
         try {
-            val raw = String(nativeTranscribe(ctx, pcm, lang, prompt, threads, beam, progress), Charsets.UTF_8)
+            val raw = String(nativeTranscribe(ctx, pcm, lang, prompt, threads, beam, vadPath, progress), Charsets.UTF_8)
             return raw.lineSequence().mapNotNull { line ->
                 val parts = line.split('\t', limit = 3)
                 if (parts.size < 3) return@mapNotNull null

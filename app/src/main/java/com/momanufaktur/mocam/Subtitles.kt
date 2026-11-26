@@ -49,21 +49,20 @@ object Subtitles {
     private fun whisperUrl(engine: String) = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" +
         if (engine == "whisper-base") "ggml-base-q5_1.bin" else "ggml-small-q5_1.bin"
 
-    fun modelSizeText(lang: String, engine: String) = when (engine) {
-        "whisper-base" -> "ca. 57 MB"
-        "whisper-small" -> "ca. 181 MB"
-        else -> modelSizeText(lang)
+    /** Silero-VAD (ca. 1 MB): erkennt Sprechpausen, damit Whisper Stille überspringt. */
+    private const val VAD_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+    fun vadFile(ctx: Context) = File(ctx.filesDir, "ggml-silero-v6.2.0.bin")
+
+    /** Pausen-Modell laden, falls es fehlt (still, ohne Fehlermeldung – ohne Modell geht es auch). */
+    fun ensureVad(ctx: Context): Boolean {
+        val f = vadFile(ctx)
+        if (f.exists()) return true
+        return try { download(VAD_URL, f, 200_000L) {}; true } catch (e: Exception) { false }
     }
 
-    fun isModelReady(ctx: Context, lang: String, engine: String) =
-        if (isWhisper(engine)) whisperFile(ctx, engine).exists() && Whisper.available else isModelReady(ctx, lang)
-
-    /** Whisper ist mehrsprachig: ein Modell für Deutsch und Englisch. */
-    fun downloadModel(ctx: Context, lang: String, engine: String, onProgress: (Int) -> Unit) {
-        if (!isWhisper(engine)) return downloadModel(ctx, lang, onProgress)
-        val target = whisperFile(ctx, engine)
+    private fun download(url: String, target: File, minBytes: Long, onProgress: (Int) -> Unit) {
         val tmp = File(target.path + ".part")
-        val conn = URL(whisperUrl(engine)).openConnection() as HttpURLConnection
+        val conn = URL(url).openConnection() as HttpURLConnection
         conn.instanceFollowRedirects = true
         conn.connectTimeout = 20000
         conn.readTimeout = 30000
@@ -79,18 +78,34 @@ object Subtitles {
                     out.write(buf, 0, r)
                     done += r
                     if (total > 0) {
-                        val p = (done * 100 / total).toInt()
-                        if (p != last) { last = p; onProgress(p) }
+                        val pr = (done * 100 / total).toInt()
+                        if (pr != last) { last = pr; onProgress(pr) }
                     }
                 }
             }
         }
-        if (tmp.length() < 10_000_000L) {
+        if (tmp.length() < minBytes) {
             tmp.delete()
             throw IllegalStateException("Download unvollständig")
         }
         target.delete()
         tmp.renameTo(target)
+    }
+
+    fun modelSizeText(lang: String, engine: String) = when (engine) {
+        "whisper-base" -> "ca. 57 MB"
+        "whisper-small" -> "ca. 181 MB"
+        else -> modelSizeText(lang)
+    }
+
+    fun isModelReady(ctx: Context, lang: String, engine: String) =
+        if (isWhisper(engine)) whisperFile(ctx, engine).exists() && Whisper.available else isModelReady(ctx, lang)
+
+    /** Whisper ist mehrsprachig: ein Modell für Deutsch und Englisch. */
+    fun downloadModel(ctx: Context, lang: String, engine: String, onProgress: (Int) -> Unit) {
+        if (!isWhisper(engine)) return downloadModel(ctx, lang, onProgress)
+        download(whisperUrl(engine), whisperFile(ctx, engine), 10_000_000L, onProgress)
+        ensureVad(ctx)
         onProgress(100)
     }
 
@@ -106,7 +121,7 @@ object Subtitles {
      * @param prompt Wortliste des Projekts (Namen, Fachbegriffe) – hilft Whisper bei der Schreibweise.
      */
     fun recognize(ctx: Context, video: Uri, lang: String, engine: String, prompt: String?,
-                  onProgress: (Int) -> Unit = {}): List<Caption> {
+                  skipPauses: Boolean = true, onProgress: (Int) -> Unit = {}): List<Caption> {
         if (!isWhisper(engine)) return recognize(ctx, video, lang)
         val model = whisperFile(ctx, engine)
         if (!model.exists()) return emptyList()
@@ -130,7 +145,9 @@ object Subtitles {
         }
         if (cancelRequested) throw java.util.concurrent.CancellationException()
         val segs = Whisper.transcribe(model.absolutePath, pcm, if (lang.startsWith("en")) "en" else "de", initial,
-            threads = 4, beam = 1, progress = { p -> onProgress(p) })
+            threads = 4, beam = 1,
+            vadPath = if (skipPauses && ensureVad(ctx)) vadFile(ctx).absolutePath else null,
+            progress = { p -> onProgress(p) })
         if (cancelRequested) throw java.util.concurrent.CancellationException()
         val caps = segs
             .filter { s -> HALLUCINATIONS.none { s.text.lowercase().contains(it) } }

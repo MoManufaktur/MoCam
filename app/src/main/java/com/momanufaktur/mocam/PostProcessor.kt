@@ -43,7 +43,9 @@ class PostProcessor(private val ctx: Context) {
         val subLang: String = "de",
         val subEngine: String = "whisper-small",
         /** Wortliste des Projekts für die Erkennung */
-        val subWords: String = ""
+        val subWords: String = "",
+        /** Sprechpausen überspringen (Silero-VAD) */
+        val skipPauses: Boolean = true
     )
 
     /** Status-Meldungen für die Anzeige (läuft auf dem Hauptthread). */
@@ -112,7 +114,7 @@ class PostProcessor(private val ctx: Context) {
             onStatus?.invoke("💬 Untertitel werden erkannt …")
             bg.execute {
                 val caps = try {
-                    Subtitles.recognize(ctx, job.input, job.subLang, job.subEngine, job.subWords) { p ->
+                    Subtitles.recognize(ctx, job.input, job.subLang, job.subEngine, job.subWords, job.skipPauses) { p ->
                         main.post { if (!cancelled) onStatus?.invoke("💬 Untertitel werden erkannt … $p %") }
                     }
                 } catch (t: Throwable) {
