@@ -1179,7 +1179,7 @@ class MainActivity : AppCompatActivity() {
                 openLogoPanel()
             }, wrapLp(0))
             editorContent.addView(logoRow)
-            if (gifFor(logo) != null) {
+            if (animFor(logo) != null) {
                 uiSection("✨ Animiertes Logo")
                 editorContent.addView(uiText(
                     "Die Animation läuft am Anfang jeder Videoaufnahme. Zusätzlich kann sie zu einem Zeitpunkt in % der " +
@@ -2099,15 +2099,14 @@ class MainActivity : AppCompatActivity() {
                     val file = File(logoDir(), "logo_${System.currentTimeMillis()}.png")
                     file.outputStream().use { result.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     savedName = file.name
-                    // Animiertes GIF: Original zusätzlich aufheben (erstes Bild = PNG oben)
-                    val head = ByteArray(6)
+                    // Animation (GIF, animiertes WebP, APNG): Original zusätzlich aufheben (erstes Bild = PNG oben)
+                    val head = ByteArray(32)
                     contentResolver.openInputStream(uri)?.use { it.read(head) }
-                    if (String(head, Charsets.US_ASCII).startsWith("GIF8")) {
-                        val gif = File(logoDir(), file.nameWithoutExtension + ".gif")
-                        contentResolver.openInputStream(uri)?.use { inp -> gif.outputStream().use { inp.copyTo(it) } }
-                        @Suppress("DEPRECATION")
-                        val movie = try { android.graphics.Movie.decodeFile(gif.path) } catch (_: Throwable) { null }
-                        if (movie == null || movie.duration() <= 0) gif.delete()  // nur ein Einzelbild
+                    val ext = LogoAnim.detect(head) { contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0) }
+                    if (ext != null) {
+                        val anim = File(logoDir(), file.nameWithoutExtension + "." + ext)
+                        contentResolver.openInputStream(uri)?.use { inp -> anim.outputStream().use { inp.copyTo(it) } }
+                        if (LogoAnim.load(anim) == null) anim.delete()  // nur ein Einzelbild / nicht abspielbar
                     }
                     result
                 }
@@ -2125,8 +2124,8 @@ class MainActivity : AppCompatActivity() {
                     onProjectChanged()
                     enableLogo()
                     refreshLogoLibrary()
-                    if (gifFor(savedName) != null) {
-                        toast("Animiertes Logo: spielt beim Start jeder Videoaufnahme einmal ab, danach bleibt das Startbild.")
+                    if (animFor(savedName) != null) {
+                        toast("Animiertes Logo erkannt: spielt beim Start jeder Videoaufnahme einmal ab, danach bleibt das Startbild.")
                         playLogoAnimation()
                     } else toast("Logo gespeichert – jetzt im Bild platzieren.")
                 }
@@ -2162,7 +2161,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Löschen") { _, _ ->
                 val wasSelected = file.name == settings.selectedLogo
                 file.delete()
-                gifFor(file.name)?.delete()
+                LogoAnim.EXTENSIONS.forEach { File(logoDir(), file.nameWithoutExtension + "." + it).delete() }
                 if (wasSelected) {
                     val next = libraryFiles().firstOrNull()
                     if (next != null) {
@@ -2234,26 +2233,24 @@ class MainActivity : AppCompatActivity() {
     // Beim Import eines GIF wird das erste Bild als PNG (normales Logo) und das GIF daneben gespeichert.
     // Zu Beginn jeder Videoaufnahme läuft die Animation einmal durch, danach bleibt das Startbild stehen.
 
-    private fun gifFor(name: String?): File? =
-        name?.let { File(logoDir(), it.substringBeforeLast('.') + ".gif") }?.takeIf { it.exists() }
+    /** Gespeicherte Animation zum Logo (GIF, WebP oder APNG) – oder null. */
+    private fun animFor(name: String?): File? = name?.let { n ->
+        LogoAnim.EXTENSIONS.map { File(logoDir(), n.substringBeforeLast('.') + "." + it) }.firstOrNull { it.exists() }
+    }
 
-    @Suppress("DEPRECATION") private var animMovie: android.graphics.Movie? = null
+    private var anim: LogoAnim? = null
     private var animName: String? = null
-    private var animStart = 0L
     private val animBufs = arrayOfNulls<Bitmap>(3)
     private var animBufIdx = 0
     private val animHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    @Suppress("DEPRECATION")
     private val animTick = object : Runnable {
         override fun run() {
-            val movie = animMovie
+            val a = anim
             val base = logoOriginal
-            if (movie == null || base == null || animName != settings.selectedLogo || !settings.logoEnabled) {
+            if (a == null || base == null || animName != settings.selectedLogo || !settings.logoEnabled || a.isDone()) {
                 stopLogoAnimation(); return
             }
-            val t = android.os.SystemClock.uptimeMillis() - animStart
-            if (t >= movie.duration()) { stopLogoAnimation(); return }
             // Ziel-Größe: Seitenverhältnis des Startbilds, max. 512 px (schnelleres Hochladen)
             val sc = minOf(1f, 512f / max(base.width, base.height))
             val tw = (base.width * sc).roundToInt().coerceAtLeast(1)
@@ -2264,35 +2261,32 @@ class MainActivity : AppCompatActivity() {
                 buf = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888); animBufs[animBufIdx] = buf
             }
             buf!!.eraseColor(Color.TRANSPARENT)
-            val c = android.graphics.Canvas(buf)
-            c.scale(tw.toFloat() / movie.width().coerceAtLeast(1), th.toFloat() / movie.height().coerceAtLeast(1))
-            movie.setTime(t.toInt())
-            movie.draw(c, 0f, 0f)
+            a.draw(android.graphics.Canvas(buf), tw, th)
             val deg = settings.logoRotation
             val frame = if (deg == 0) buf else Bitmap.createBitmap(buf, 0, 0, tw, th,
                 android.graphics.Matrix().apply { postRotate(deg.toFloat()) }, true)
             processor.setLogo(frame)
             videoProcessor.setLogo(frame)
             overlay.logoBitmap = frame
-            animHandler.postDelayed(this, 50)
+            animHandler.postDelayed(this, 40)
         }
     }
 
-    /** Spielt das animierte Logo des Projekts einmal ab (kein GIF → nichts passiert). */
-    @Suppress("DEPRECATION")
+    /** Spielt das animierte Logo des Projekts einmal ab (GIF, WebP oder APNG; sonst passiert nichts). */
     private fun playLogoAnimation() {
         val name = settings.selectedLogo
-        val gif = gifFor(name) ?: return
+        val file = animFor(name) ?: return
         if (!settings.logoEnabled || logoOriginal == null) return
         animHandler.removeCallbacks(animTick)
+        anim?.stop()
         bg.execute {
-            val movie = if (animName == name && animMovie != null) animMovie
-                else try { android.graphics.Movie.decodeFile(gif.path) } catch (_: Throwable) { null }
+            // WebP-Animationen lassen sich nicht zurückspulen → jedes Mal frisch laden; andere wiederverwenden
+            val a = if (animName == name && anim != null && file.extension != "webp") anim else LogoAnim.load(file)
             runOnUiThread {
-                if (movie == null || movie.duration() <= 0 || settings.selectedLogo != name) return@runOnUiThread
-                animMovie = movie
+                if (a == null || settings.selectedLogo != name) return@runOnUiThread
+                anim = a
                 animName = name
-                animStart = android.os.SystemClock.uptimeMillis()
+                a.start()
                 animTick.run()
             }
         }
@@ -2300,6 +2294,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopLogoAnimation() {
         animHandler.removeCallbacks(animTick)
+        anim?.stop()
         // Startbild wieder anzeigen (volle Auflösung)
         logoOriginal?.let { applyLogo(it) }
     }
@@ -3602,7 +3597,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Animiertes Logo erneut abspielen bei x % der Aufnahmezeit (nur mit Zeitlimit, Länge muss feststehen). */
     private fun checkGifRepeats(recSec: Double) {
-        if (settings.timeLimit == 0 || gifFor(settings.selectedLogo) == null) return
+        if (settings.timeLimit == 0 || animFor(settings.selectedLogo) == null) return
         val total = effectiveLimit().toDouble()
         settings.gifRepeats.forEachIndexed { i, pct ->
             val start = (pct / 100.0 * total).coerceIn(0.0, maxOf(0.0, total - 1.0))
