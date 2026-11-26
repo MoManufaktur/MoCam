@@ -86,12 +86,20 @@ async def main():
             _, w, h = frame_svg(0, tc, shc)
             scale = 900 / w
             pg = await b.new_page(viewport={'width': int(w), 'height': int(h)}, device_scale_factor=scale)
-            frames = []
+            frames, rgba = [], []
             for i in range(int(FPS * DUR)):
                 s, _, _ = frame_svg(i / FPS, tc, shc)
                 await pg.set_content(f'<html><body style="margin:0;background:transparent">{s}</body></html>')
-                frames.append(to_gif_frame(await pg.screenshot(omit_background=True)))
+                png = await pg.screenshot(omit_background=True)
+                frames.append(to_gif_frame(png))
+                rgba.append(Image.open(io.BytesIO(png)).convert('RGBA'))
             await pg.close()
+            # Weiche Kanten: animiertes WebP und APNG (echte Transparenz)
+            base = name.replace('.gif', '')
+            rgba[0].save(os.path.join(OUT, base + '.webp'), save_all=True, append_images=rgba[1:],
+                         duration=int(1000 / FPS), loop=0, lossless=False, quality=90, method=6)
+            rgba[0].save(os.path.join(OUT, base + '.apng'), format='PNG', save_all=True, append_images=rgba[1:],
+                         duration=int(1000 / FPS), loop=0, disposal=1, blend=0, optimize=True)
             frames[0].save(os.path.join(OUT, name + '.gif'), save_all=True, append_images=frames[1:],
                            duration=int(1000 / FPS), loop=0, disposal=2, transparency=255, optimize=False)
             print(name, frames[0].size, len(frames))
