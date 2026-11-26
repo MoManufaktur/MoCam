@@ -197,7 +197,8 @@ object Apng {
         if (frames.size < 2) return null
 
         val canvasBmp = Bitmap.createBitmap(fullW, fullH, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(canvasBmp)
+        canvasBmp.density = Bitmap.DENSITY_NONE
+        val canvas = Canvas(canvasBmp).apply { density = Bitmap.DENSITY_NONE }
         val sc = minOf(1f, MAX_SIDE.toFloat() / max(fullW, fullH))
         val outW = (fullW * sc).toInt().coerceAtLeast(1); val outH = (fullH * sc).toInt().coerceAtLeast(1)
         val clear = Paint().apply { xfermode = android.graphics.PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
@@ -224,14 +225,18 @@ object Apng {
             val before = if (f.dispose == 2) Bitmap.createBitmap(canvasBmp) else null
             if (part != null) {
                 if (f.blend == 0) canvas.drawRect(region, clear)               // APNG_BLEND_OP_SOURCE
-                canvas.drawBitmap(part, f.x.toFloat(), f.y.toFloat(), if (f.blend == 0) src else null)
+                // Ziel-Rechteck explizit angeben: sonst skaliert Android nach Bildschirmdichte (Bild wird zu groß)
+                canvas.drawBitmap(part, null, region, if (f.blend == 0) src else null)
                 part.recycle()
             }
             result += Bitmap.createScaledBitmap(canvasBmp, outW, outH, true)
             delays[i] = f.delay
             when (f.dispose) {
                 1 -> canvas.drawRect(region, clear)                            // auf transparent zurücksetzen
-                2 -> before?.let { canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR); canvas.drawBitmap(it, 0f, 0f, null); it.recycle() }
+                2 -> before?.let {
+                    canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                    canvas.drawBitmap(it, null, Rect(0, 0, fullW, fullH), null); it.recycle()
+                }
             }
         }
         canvasBmp.recycle()

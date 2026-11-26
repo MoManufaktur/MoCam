@@ -500,7 +500,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Antippen = auswählen · lange drücken = löschen"
+            android:text="Antippen = auswählen · lange drücken = austauschen oder löschen"
             android:textColor="#88FFFFFF"
             android:textSize="11sp" />
 

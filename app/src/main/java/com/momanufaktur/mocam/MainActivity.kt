@@ -226,6 +226,15 @@ class MainActivity : AppCompatActivity() {
             if (uri != null) importLogo(uri)
         }
 
+    /** Logo austauschen: neues Bild unter demselben Dateinamen → Projekt-Einstellungen bleiben erhalten. */
+    private var replaceTarget: File? = null
+    private val pickReplacement =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            val t = replaceTarget
+            replaceTarget = null
+            if (uri != null && t != null) importLogo(uri, t)
+        }
+
     // =====================================================================
     // Lifecycle
     // =====================================================================
@@ -2062,7 +2071,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun importLogo(uri: Uri) {
+    private fun importLogo(uri: Uri, replace: File? = null) {
         bg.execute {
             var savedName: String? = null
             val bmp = try {
@@ -2096,9 +2105,11 @@ class MainActivity : AppCompatActivity() {
                         b = c
                     }
                     val result: Bitmap = b
-                    val file = File(logoDir(), "logo_${System.currentTimeMillis()}.png")
+                    val file = replace ?: File(logoDir(), "logo_${System.currentTimeMillis()}.png")
                     file.outputStream().use { result.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     savedName = file.name
+                    // Beim Austauschen alte Animation entfernen (neues Bild kann statisch sein)
+                    if (replace != null) LogoAnim.EXTENSIONS.forEach { File(logoDir(), file.nameWithoutExtension + "." + it).delete() }
                     // Animation (GIF, animiertes WebP, APNG): Original zusätzlich aufheben (erstes Bild = PNG oben)
                     val head = ByteArray(32)
                     contentResolver.openInputStream(uri)?.use { it.read(head) }
@@ -2118,13 +2129,16 @@ class MainActivity : AppCompatActivity() {
                 if (bmp == null) {
                     toast("Logo konnte nicht geladen werden.")
                 } else {
+                    if (replace != null) { anim = null; animName = null }  // alte Animation nicht weiterverwenden
                     settings.selectedLogo = savedName
                     loadedLogoName = savedName
                     applyLogo(bmp)
                     onProjectChanged()
                     enableLogo()
                     refreshLogoLibrary()
-                    if (animFor(savedName) != null) {
+                    if (replace != null && animFor(savedName) == null) {
+                        toast("Logo ausgetauscht – Position, Bauchbinde, Intro/Outro und Ordner bleiben.")
+                    } else if (animFor(savedName) != null) {
                         toast("Animiertes Logo erkannt: spielt beim Start jeder Videoaufnahme einmal ab, danach bleibt das Startbild.")
                         playLogoAnimation()
                     } else toast("Logo gespeichert – jetzt im Bild platzieren.")
@@ -2151,6 +2165,20 @@ class MainActivity : AppCompatActivity() {
                 refreshLogoLibrary()
             }
         }
+    }
+
+    /** Langer Druck auf ein Logo: austauschen oder löschen. */
+    private fun logoOptions(file: File) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Logo bearbeiten")
+            .setItems(arrayOf("🔄 Logo austauschen (Projekt-Einstellungen bleiben)", "🗑 Logo löschen")) { _, which ->
+                when (which) {
+                    0 -> { replaceTarget = file; pickReplacement.launch("image/*") }
+                    1 -> confirmDeleteLogo(file)
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
     }
 
     private fun confirmDeleteLogo(file: File) {
@@ -2212,7 +2240,7 @@ class MainActivity : AppCompatActivity() {
                             if (file.name == selected) R.drawable.logo_tile_selected else R.drawable.logo_tile
                         )
                         setOnClickListener { selectLogo(file) }
-                        setOnLongClickListener { confirmDeleteLogo(file); true }
+                        setOnLongClickListener { logoOptions(file); true }
                     }
                     logoLibrary.addView(iv, LinearLayout.LayoutParams(size, size).apply { marginEnd = dp(8) })
                 }
