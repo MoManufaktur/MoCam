@@ -45,7 +45,13 @@ class PostProcessor(private val ctx: Context) {
         /** Wortliste des Projekts für die Erkennung */
         val subWords: String = "",
         /** Sprechpausen überspringen (Silero-VAD) */
-        val skipPauses: Boolean = true
+        val skipPauses: Boolean = true,
+        /** Zusätzliche Bauchbinden-Einblendungen (Prozent der Aufnahmezeit), nur wenn ohne Zeitlimit */
+        val lowerPcts: List<Int> = emptyList(),
+        val lowerName: String = "",
+        val lowerTitle: String = "",
+        val lowerStyle: LowerThirdStyle? = null,
+        val lowerSec: Int = 5
     )
 
     /** Status-Meldungen für die Anzeige (läuft auf dem Hauptthread). */
@@ -146,7 +152,8 @@ class PostProcessor(private val ctx: Context) {
         if (job.subtitles && captions.isEmpty()) {
             main.post { onDone?.invoke(null, "Keine Sprache erkannt – keine Untertitel") }
         }
-        if (!burn && job.intro == null && job.outro == null) {
+        val lowerOverlay = buildLowerOverlay(job)
+        if (!burn && lowerOverlay == null && job.intro == null && job.outro == null) {
             // Nichts am Video zu ändern – ggf. nur die .srt-Datei neben das Original legen
             if (srt) bg.execute {
                 val ok = try { saveSrt(displayName(job.input), job.folder, toSrt(captions)) } catch (t: Throwable) {
@@ -170,7 +177,10 @@ class PostProcessor(private val ctx: Context) {
             .setEffects(Effects(emptyList(), listOf(fit))).build() }
 
         val mainEffects = mutableListOf<androidx.media3.common.Effect>(fit)
-        if (burn) mainEffects += OverlayEffect(listOf(CaptionOverlay(captions, job.subStyle)))
+        val overlays = mutableListOf<androidx.media3.effect.TextureOverlay>()
+        lowerOverlay?.let { overlays += it }
+        if (burn) overlays += CaptionOverlay(captions, job.subStyle)
+        if (overlays.isNotEmpty()) mainEffects += OverlayEffect(overlays)
         items += EditedMediaItem.Builder(MediaItem.fromUri(job.input))
             .setEffects(Effects(emptyList(), mainEffects)).build()
 
@@ -229,6 +239,18 @@ class PostProcessor(private val ctx: Context) {
         currentTransformer = transformer
         transformer.start(composition, outFile.absolutePath)
         startProgress(transformer)
+    }
+
+    /** Bauchbinde zu x % der Aufnahmezeit (Länge des Hauptvideos, ohne Intro/Outro). */
+    private fun buildLowerOverlay(job: Job): LowerThirdOverlay? {
+        val st = job.lowerStyle ?: return null
+        if (job.lowerPcts.isEmpty()) return null
+        val bmp = LowerThird.render(job.lowerName, job.lowerTitle, st) ?: return null
+        val d = try { durationSec(job.input) } catch (_: Exception) { 0.0 }
+        if (d <= 0.0) return null
+        val dur = job.lowerSec.toDouble().coerceAtMost(d)
+        val starts = job.lowerPcts.map { (it / 100.0 * d).coerceIn(0.0, maxOf(0.0, d - dur)) }
+        return LowerThirdOverlay(bmp, st, starts, dur)
     }
 
     private var progressRunnable: Runnable? = null

@@ -174,6 +174,24 @@ class Settings(ctx: Context) {
         get() = pS("subWords", "")
         set(v) = p.edit().putString("subWords$ps", v).apply()
 
+    /** Bauchbinde: 2. und 3. Einblendung bei x % der Aufnahmezeit (je Projekt) */
+    var lower2On: Boolean
+        get() = pB("lower2On", false)
+        set(v) = p.edit().putBoolean("lower2On$ps", v).apply()
+    var lower2Pct: Int
+        get() = pI("lower2Pct", 50)
+        set(v) = p.edit().putInt("lower2Pct$ps", v).apply()
+    var lower3On: Boolean
+        get() = pB("lower3On", false)
+        set(v) = p.edit().putBoolean("lower3On$ps", v).apply()
+    var lower3Pct: Int
+        get() = pI("lower3Pct", 90)
+        set(v) = p.edit().putInt("lower3Pct$ps", v).apply()
+
+    /** Prozentwerte der aktiven Zusatz-Einblendungen */
+    val lowerRepeats: List<Int>
+        get() = listOfNotNull(lower2Pct.takeIf { lower2On }, lower3Pct.takeIf { lower3On })
+
     /** Intro/Outro je Projekt einmalig aus dem alten gemeinsamen Clip übernehmen? */
     fun takeLegacyClip(kind: String): Boolean {
         val k = "legacyClip_${kind}$ps"

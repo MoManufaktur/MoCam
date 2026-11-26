@@ -1662,6 +1662,7 @@ class MainActivity : AppCompatActivity() {
             when (event) {
                 is VideoRecordEvent.Start -> {
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                    lowerFired.clear()
                     if (settings.lowerEnabled) startLowerThird()
                     playLogoAnimation() // animiertes Logo: einmal abspielen, dann Startbild
                     if (prompterActive()) prompterView.playing = true
@@ -1679,6 +1680,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 is VideoRecordEvent.Status -> {
                     lastRecordedNs = event.recordingStats.recordedDurationNanos
+                    checkLowerRepeats(lastRecordedNs / 1e9)
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
                     val limit = effectiveLimit()
                     recIndicator.text = if (limit > 0) {
@@ -2645,6 +2647,26 @@ class MainActivity : AppCompatActivity() {
             uiSection("Schriftfarbe Funktion")
             uiChoice(names, idx(st.titleColor), cols) { i -> update { it.copy(titleColor = cols[i]) } }
 
+            uiSection("🔁 Weitere Einblendungen")
+            editorContent.addView(uiText(
+                if (settings.timeLimit > 0)
+                    "Zeitpunkt in % der Aufnahmezeit (ohne Intro/Outro). Mit Zeitlimit wird live eingeblendet – " +
+                        "Aufnahmezeit jetzt ${effectiveLimit()} s."
+                else "Zeitpunkt in % der Aufnahmezeit (ohne Intro/Outro). Ohne Zeitlimit steht die Länge erst nach der " +
+                    "Aufnahme fest – dann wird in der Nachbearbeitung eingeblendet (das Video wird dafür neu berechnet).",
+                11f, Color.argb(170, 255, 255, 255)))
+            fun repeatRow(n: Int, on: Boolean, pct: Int, setOn: (Boolean) -> Unit, setPct: (Int) -> Unit) {
+                editorContent.addView(SwitchCompat(this).apply {
+                    text = "$n. Einblendung"
+                    setTextColor(Color.WHITE)
+                    isChecked = on
+                    setOnCheckedChangeListener { _, c -> setOn(c) }
+                })
+                uiSlider("$n. bei", 0f, 1f, pct / 100f) { v -> setPct((v * 100).roundToInt()) }
+            }
+            repeatRow(2, settings.lower2On, settings.lower2Pct, { settings.lower2On = it }, { settings.lower2Pct = it })
+            repeatRow(3, settings.lower3On, settings.lower3Pct, { settings.lower3On = it }, { settings.lower3Pct = it })
+
             uiSection("Dauer am Videoanfang")
             val durs = listOf(3, 5, 8, 10, 15)
             uiChoice(durs.map { "$it s" }, durs.indexOf(settings.lowerSeconds)) { i ->
@@ -2839,10 +2861,14 @@ class MainActivity : AppCompatActivity() {
         val subs = settings.subtitlesEnabled && Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine) && settings.timelapse == 0
         val intro = if (settings.introOutroEnabled) introFile().takeIf { it.exists() } else null
         val outro = if (settings.introOutroEnabled) outroFile().takeIf { it.exists() } else null
-        if (!subs && intro == null && outro == null) return false
+        // Zusatz-Einblendungen der Bauchbinde: mit Zeitlimit live, ohne Limit erst hier (Länge steht jetzt fest)
+        val lowerPost = if (settings.lowerEnabled && settings.timeLimit == 0 && settings.timelapse == 0)
+            settings.lowerRepeats else emptyList()
+        if (!subs && intro == null && outro == null && lowerPost.isEmpty()) return false
         post.enqueue(PostProcessor.Job(uri, recordingFolder, subs, intro, outro,
             settings.subtitleMode, settings.subtitleStyle, settings.subtitleLang,
-            settings.subtitleEngine, settings.subtitleWords, settings.subtitleSkipPauses))
+            settings.subtitleEngine, settings.subtitleWords, settings.subtitleSkipPauses,
+            lowerPost, settings.lowerName, settings.lowerTitle, settings.lowerStyle, settings.lowerSeconds))
         toast("Video gespeichert – wird jetzt bearbeitet")
         return true
     }
@@ -3397,6 +3423,22 @@ class MainActivity : AppCompatActivity() {
         val now = android.os.SystemClock.uptimeMillis()
         fxState.lowerStartMs = now
         overlay.lowerStartMs = now
+    }
+
+    private val lowerFired = HashSet<Int>()
+
+    /** Mit Zeitlimit: Bauchbinde live bei x % der Aufnahmezeit erneut einblenden (Pausen werden berücksichtigt). */
+    private fun checkLowerRepeats(recSec: Double) {
+        if (!settings.lowerEnabled || settings.timeLimit == 0) return
+        val total = effectiveLimit().toDouble()
+        val dur = settings.lowerSeconds.toDouble()
+        settings.lowerRepeats.forEachIndexed { i, pct ->
+            val start = (pct / 100.0 * total).coerceIn(0.0, maxOf(0.0, total - dur))
+            if (i !in lowerFired && recSec >= start && start > 0.5) {
+                lowerFired += i
+                startLowerThird()
+            }
+        }
     }
 
     private fun stopLowerThird() {

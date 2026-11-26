@@ -7,6 +7,8 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.SystemClock
+import androidx.media3.common.util.Size
+import androidx.media3.effect.BitmapOverlay
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -124,5 +126,55 @@ object LowerThird {
         val fadeIn = (t / FADE_MS).coerceIn(0f, 1f)
         val fadeOut = ((durationMs - t) / FADE_MS).coerceIn(0f, 1f)
         return minOf(fadeIn, fadeOut)
+    }
+}
+
+
+/**
+ * Zusätzliche Einblendungen der Bauchbinde in der Nachbearbeitung (wenn die Videolänge erst nach
+ * der Aufnahme feststeht). Zeichnet die Bauchbinde zu den angegebenen Zeiten mit Ein-/Ausblenden.
+ */
+class LowerThirdOverlay(
+    private val bmp: Bitmap,
+    private val st: LowerThirdStyle,
+    private val startsSec: List<Double>,
+    private val durSec: Double
+) : BitmapOverlay() {
+    private var width = 1080
+    private var height = 1920
+    private var firstUs = -1L
+    private val cache = HashMap<Int, Bitmap>()
+
+    override fun configure(videoSize: Size) {
+        super.configure(videoSize)
+        width = videoSize.width
+        height = videoSize.height
+        cache.clear()
+    }
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        if (firstUs < 0) firstUs = presentationTimeUs
+        val t = (presentationTimeUs - firstUs) / 1_000_000.0
+        var a = 0.0
+        val fade = 0.4
+        for (s in startsSec) {
+            val dt = t - s
+            if (dt < 0 || dt > durSec) continue
+            a = maxOf(a, minOf(1.0, dt / fade, (durSec - dt) / fade))
+        }
+        val level = (a * 10).roundToInt().coerceIn(0, 10)  // 11 Stufen reichen für weiches Blenden
+        return cache.getOrPut(level) { render(level / 10f) }
+    }
+
+    private fun render(alpha: Float): Bitmap {
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        if (alpha <= 0f) return out
+        val w = st.width * width
+        val h = w * bmp.height / bmp.width
+        val left = st.x * width
+        val bottom = st.y * height
+        val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply { this.alpha = (alpha * 255).toInt() }
+        Canvas(out).drawBitmap(bmp, null, RectF(left, bottom - h, left + w, bottom), p)
+        return out
     }
 }
