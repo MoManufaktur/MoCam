@@ -374,7 +374,9 @@ class MainActivity : AppCompatActivity() {
         btnZebra = findViewById(R.id.btnZebra)
         btnPro = findViewById(R.id.btnPro)
         btnLight = findViewById(R.id.btnLight)
-        btnLight.setOnClickListener { setLightMode(!lightMode) }
+        btnLight.setOnClickListener {
+            if (isFrontCam) setLightMode(!lightMode) else toggleTorch()
+        }
         btnInterval = findViewById(R.id.btnInterval)
         btnBracket = findViewById(R.id.btnBracket)
         btnHisto = findViewById(R.id.btnHisto)
@@ -936,7 +938,27 @@ class MainActivity : AppCompatActivity() {
         overlay.drawLogoPreview = !effectActive
         applyProSettings()
         applyPreviewMirror()
+        applyTorch()
         updateUi()
+    }
+
+    // ---------------- Kameralicht (Taschenlampe) der Rückkamera ----------------
+    private var torchOn = false
+
+    private fun hasTorch() = camera?.cameraInfo?.hasFlashUnit() == true
+
+    private fun toggleTorch() {
+        if (!hasTorch()) { toast("Diese Kamera hat kein Licht."); return }
+        torchOn = !torchOn
+        applyTorch()
+        updateUi()
+    }
+
+    /** Licht nach jedem Kamera-/Moduswechsel wiederherstellen (beim Neuverbinden geht es sonst aus). */
+    private fun applyTorch() {
+        val cam = camera ?: return
+        if (isFrontCam || !cam.cameraInfo.hasFlashUnit()) return
+        cam.cameraControl.enableTorch(torchOn)
     }
 
     // =====================================================================
@@ -1048,7 +1070,13 @@ class MainActivity : AppCompatActivity() {
             openBaseEditor()
         }
 
-        // 6. Unterstützen
+        // 6. Backup
+        entry("💾 Backup", settings.lastBackup.let { if (it == 0L) "Noch kein Backup erstellt"
+            else "Letztes Backup: " + java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.GERMANY).format(java.util.Date(it)) }) {
+            openBackupEditor()
+        }
+
+        // 7. Unterstützen
         settingsContent.addView(text("💛 Unterstützen", 14f, getColor(R.color.accent), true).apply { setPadding(0, dp(18), 0, 0) })
         settingsContent.addView(text("MoCam ist Open Source, kostenlos und werbefrei – das Projekt lebt von Spenden.",
             12f, Color.argb(200, 255, 255, 255)))
@@ -1151,6 +1179,27 @@ class MainActivity : AppCompatActivity() {
                 openLogoPanel()
             }, wrapLp(0))
             editorContent.addView(logoRow)
+            if (gifFor(logo) != null) {
+                uiSection("✨ Animiertes Logo")
+                editorContent.addView(uiText(
+                    "Die Animation läuft am Anfang jeder Videoaufnahme. Zusätzlich kann sie zu einem Zeitpunkt in % der " +
+                        "Aufnahmezeit (ohne Intro/Outro) erneut ablaufen." +
+                        if (settings.timeLimit > 0) " Aufnahmezeit jetzt ${effectiveLimit()} s."
+                        else " ⚠ Dafür muss ein Zeitlimit (⏳) eingestellt sein – sonst steht die Länge vorher nicht fest.",
+                    11f, Color.argb(170, 255, 255, 255)))
+                fun gifRow(n: Int, on: Boolean, pct: Int, setOn: (Boolean) -> Unit, setPct: (Int) -> Unit) {
+                    editorContent.addView(SwitchCompat(this).apply {
+                        text = "$n. Abspielen"
+                        setTextColor(Color.WHITE)
+                        isChecked = on
+                        setOnCheckedChangeListener { _, c -> setOn(c) }
+                    })
+                    uiSlider("$n. bei", 0f, 1f, pct / 100f) { v -> setPct((v * 100).roundToInt()) }
+                }
+                gifRow(2, settings.gif2On, settings.gif2Pct, { settings.gif2On = it }, { settings.gif2Pct = it })
+                gifRow(3, settings.gif3On, settings.gif3Pct, { settings.gif3On = it }, { settings.gif3Pct = it })
+                editorContent.addView(uiChip("▶ Animation testen") { playLogoAnimation() }, wrapLp(0))
+            }
 
             // Bauchbinde
             uiSection("🪪 Bauchbinde")
@@ -1283,6 +1332,74 @@ class MainActivity : AppCompatActivity() {
                 applyCameraFixes()
                 flipText.text = "Video-Bild: " + if (v) "gespiegelt" else "normal"
             }, wrapLp(0))
+        }
+    }
+
+    // ---------------- Backup ----------------
+    private val createBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri == null) return@registerForActivityResult
+        toast("Backup wird erstellt …")
+        bg.execute {
+            val n = try {
+                contentResolver.openOutputStream(uri)?.use { Backup.export(this, it) } ?: -1
+            } catch (e: Exception) { Log.e(TAG, "Backup", e); -1 }
+            runOnUiThread {
+                if (n >= 0) {
+                    settings.lastBackup = System.currentTimeMillis()
+                    toast("✓ Backup gespeichert ($n Dateien + alle Einstellungen)")
+                    if (editorPanel.visibility == View.VISIBLE) openBackupEditor()
+                } else toast("Backup fehlgeschlagen")
+            }
+        }
+    }
+
+    private val restoreBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Backup wiederherstellen?")
+            .setMessage("Alle aktuellen Einstellungen, Projekte, Logos und Intro/Outro-Clips werden durch das Backup ersetzt. " +
+                "Fotos und Videos in der Galerie bleiben unberührt.")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Wiederherstellen") { _, _ ->
+                toast("Backup wird wiederhergestellt …")
+                bg.execute {
+                    val result = try {
+                        contentResolver.openInputStream(uri)?.use { Backup.import(this, it) }?.let { "✓ Wiederhergestellt ($it Dateien) – App startet neu" }
+                            ?: "Datei konnte nicht geöffnet werden"
+                    } catch (e: IllegalArgumentException) { "Das ist keine MoCam-Sicherung" }
+                    catch (e: Exception) { Log.e(TAG, "Restore", e); "Wiederherstellen fehlgeschlagen" }
+                    runOnUiThread {
+                        toast(result)
+                        if (result.startsWith("✓")) window.decorView.postDelayed({ recreate() }, 800)
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun openBackupEditor() {
+        openEditor("💾 Backup") {
+            editorContent.addView(uiText(
+                "Sichert die ganze App in einer ZIP-Datei: alle Einstellungen, alle Projekte mit Logos (auch GIF), " +
+                    "Logo-Positionen, Bauchbinden, Wortlisten, Copyright und Intro/Outro-Clips.\n" +
+                    "Nicht enthalten: Fotos und Videos (die liegen in der Galerie) und die Sprachmodelle (werden bei Bedarf neu geladen).",
+                12f, Color.argb(210, 255, 255, 255)))
+            editorContent.addView(uiText(
+                if (settings.lastBackup == 0L) "Noch kein Backup erstellt."
+                else "Letztes Backup: " + java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.GERMANY).format(java.util.Date(settings.lastBackup)),
+                12f, Color.rgb(255, 213, 79)).apply { setPadding(0, dp(8), 0, 0) })
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+            row.addView(uiChip("💾 Backup erstellen …") {
+                val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.GERMANY).format(java.util.Date())
+                createBackup.launch("MoCam-Backup-$date.zip")
+            }, wrapLp(8))
+            row.addView(uiChip("📂 Wiederherstellen …") {
+                restoreBackup.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed"))
+            }, wrapLp(0))
+            editorContent.addView(row)
+            editorContent.addView(uiText(
+                "Tipp: Speichere das Backup z. B. in Google Drive, Huawei Cloud oder auf einen USB-Stick – so kannst du alles " +
+                    "auf ein neues Handy übernehmen.", 11f, Color.argb(170, 255, 255, 255)).apply { setPadding(0, dp(8), 0, 0) })
         }
     }
 
@@ -1663,6 +1780,7 @@ class MainActivity : AppCompatActivity() {
                 is VideoRecordEvent.Start -> {
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
                     lowerFired.clear()
+                    gifFired.clear()
                     if (settings.lowerEnabled) startLowerThird()
                     playLogoAnimation() // animiertes Logo: einmal abspielen, dann Startbild
                     if (prompterActive()) prompterView.playing = true
@@ -1681,6 +1799,7 @@ class MainActivity : AppCompatActivity() {
                 is VideoRecordEvent.Status -> {
                     lastRecordedNs = event.recordingStats.recordedDurationNanos
                     checkLowerRepeats(lastRecordedNs / 1e9)
+                    checkGifRepeats(lastRecordedNs / 1e9)
                     val s = TimeUnit.NANOSECONDS.toSeconds(event.recordingStats.recordedDurationNanos)
                     val limit = effectiveLimit()
                     recIndicator.text = if (limit > 0) {
@@ -1928,6 +2047,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadSavedLogo() {
         bg.execute {
             migrateOldLogo()
+            try { cleanupLegacyClips() } catch (e: Exception) { Log.w(TAG, "Clip-Aufräumen", e) }
             val file = settings.selectedLogo?.let { File(logoDir(), it) }?.takeIf { it.exists() }
                 ?: libraryFiles().firstOrNull()
             val bmp = file?.let { BitmapFactory.decodeFile(it.path) }
@@ -2838,13 +2958,39 @@ class MainActivity : AppCompatActivity() {
     private fun outroFile() = projectClip("outro")
 
     /** Intro/Outro je Projekt; der alte gemeinsame Clip wird beim ersten Zugriff einmal übernommen. */
-    private fun projectClip(kind: String): File {
-        val f = File(filesDir, "${kind}_${settings.projectFileKey}.mp4")
-        val legacy = File(filesDir, "$kind.mp4")
-        if (!f.exists() && legacy.exists() && settings.takeLegacyClip(kind)) {
-            try { legacy.copyTo(f) } catch (e: Exception) { Log.w(TAG, "Clip übernehmen", e) }
+    private fun projectClip(kind: String): File = File(filesDir, "${kind}_${settings.projectFileKey}.mp4")
+
+    /**
+     * Einmalig aufräumen: Früher gab es ein gemeinsames Intro/Outro (intro.mp4/outro.mp4), das jedes neue
+     * Projekt beim ersten Öffnen kopiert hat. Es gehört nur dem ältesten Projekt (erstes Logo);
+     * Kopien in anderen Projekten, die nie selbst gewählt wurden, werden entfernt.
+     */
+    private fun cleanupLegacyClips() {
+        if (settings.flag("clipCleanup1")) return
+        val logos = (logoDir().listFiles { f -> f.name.endsWith(".png") } ?: emptyArray())
+            .sortedBy { it.name.removePrefix("logo_").removeSuffix(".png").toLongOrNull() ?: it.lastModified() }
+        val owner = logos.firstOrNull()?.name
+        owner?.let { settings.migrateIntroOutroTo(it) }
+        for (kind in listOf("intro", "outro")) {
+            val legacy = File(filesDir, "$kind.mp4")
+            if (!legacy.exists()) continue
+            val ownerKey = owner?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            if (ownerKey != null) {
+                val ownerFile = File(filesDir, "${kind}_$ownerKey.mp4")
+                if (!ownerFile.exists()) try { legacy.copyTo(ownerFile) } catch (_: Exception) { }
+            }
+            logos.drop(1).forEach { logo ->
+                val key = logo.name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val f = File(filesDir, "${kind}_$key.mp4")
+                // nur automatisch kopierte Clips (kein eigener Dateiname gemerkt, gleiche Größe) löschen
+                if (f.exists() && settings.clipNameFor(kind, logo.name) == null && f.length() == legacy.length()) f.delete()
+            }
+            File(filesDir, "${kind}_ohne_logo.mp4").let { f ->
+                if (f.exists() && f.length() == legacy.length()) f.delete()
+            }
+            legacy.delete()
         }
-        return f
+        settings.setFlag("clipCleanup1")
     }
 
     private fun importClip(uri: Uri, target: File, kind: String) {
@@ -3452,6 +3598,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val gifFired = HashSet<Int>()
+
+    /** Animiertes Logo erneut abspielen bei x % der Aufnahmezeit (nur mit Zeitlimit, Länge muss feststehen). */
+    private fun checkGifRepeats(recSec: Double) {
+        if (settings.timeLimit == 0 || gifFor(settings.selectedLogo) == null) return
+        val total = effectiveLimit().toDouble()
+        settings.gifRepeats.forEachIndexed { i, pct ->
+            val start = (pct / 100.0 * total).coerceIn(0.0, maxOf(0.0, total - 1.0))
+            if (i !in gifFired && recSec >= start && start > 0.5) {
+                gifFired += i
+                playLogoAnimation()
+            }
+        }
+    }
+
     private fun stopLowerThird() {
         fxState.lowerStartMs = 0L
         overlay.lowerStartMs = 0L
@@ -3949,9 +4110,11 @@ class MainActivity : AppCompatActivity() {
 
         // Ringlicht nur bei der Frontkamera
         // Frontkamera: nur 💡 Licht (Display als Ringlicht) · Rückkamera: nur ⚡ Blitz / 🔦 Taschenlampe
-        btnLight.visibility = if (isFrontCam) View.VISIBLE else View.GONE
-        btnFlash.visibility = if (isFrontCam) View.GONE else View.VISIBLE
-        btnLight.text = if (lightMode) "💡 Licht an" else "💡 Licht"
+        // Frontkamera: 💡 Ringlicht (Display) · Rückkamera: 🔦 Kameralicht + ⚡ Blitz (nur Foto)
+        btnLight.visibility = if (isFrontCam || hasTorch()) View.VISIBLE else View.GONE
+        btnFlash.visibility = if (isFrontCam || videoMode) View.GONE else View.VISIBLE
+        btnLight.text = if (isFrontCam) { if (lightMode) "💡 Licht an" else "💡 Licht" }
+            else if (torchOn) "🔦 Licht an" else "🔦 Licht aus"
         if (lightMode && !isFrontCam) { setLightMode(false); return }
         if (lightMode) { styleLight(topBar); styleLight(bottomPanel) }
     }

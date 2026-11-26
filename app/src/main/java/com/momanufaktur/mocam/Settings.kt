@@ -145,6 +145,32 @@ class Settings(ctx: Context) {
 
     /** Original-Dateiname des gewählten Intro/Outro-Clips im aktuellen Projekt. */
     fun clipName(kind: String): String? = p.getString("clipName_$kind$ps", null)
+    fun clipNameFor(kind: String, logo: String): String? = p.getString("clipName_$kind@$logo", null)
+
+    /** Zeitpunkt des letzten Backups (ms) */
+    var lastBackup: Long
+        get() = p.getLong("lastBackup", 0L)
+        set(v) = p.edit().putLong("lastBackup", v).apply()
+
+    /** Einmalige Aufräum-Markierungen (global) */
+    fun flag(key: String) = p.getBoolean(key, false)
+    fun setFlag(key: String) { p.edit().putBoolean(key, true).apply() }
+
+    /** Animiertes Logo: 2. und 3. Abspielen bei x % der Aufnahmezeit (je Projekt) */
+    var gif2On: Boolean
+        get() = p.getBoolean("gif2On$ps", false)
+        set(v) = p.edit().putBoolean("gif2On$ps", v).apply()
+    var gif2Pct: Int
+        get() = p.getInt("gif2Pct$ps", 50)
+        set(v) = p.edit().putInt("gif2Pct$ps", v).apply()
+    var gif3On: Boolean
+        get() = p.getBoolean("gif3On$ps", false)
+        set(v) = p.edit().putBoolean("gif3On$ps", v).apply()
+    var gif3Pct: Int
+        get() = p.getInt("gif3Pct$ps", 90)
+        set(v) = p.edit().putInt("gif3Pct$ps", v).apply()
+    val gifRepeats: List<Int>
+        get() = listOfNotNull(gif2Pct.takeIf { gif2On }, gif3Pct.takeIf { gif3On })
     fun setClipName(kind: String, name: String?) {
         p.edit().putString("clipName_$kind$ps", name).apply()
     }
@@ -267,8 +293,14 @@ class Settings(ctx: Context) {
 
     /** #10 Intro/Outro an jedes Video anhängen. */
     var introOutroEnabled: Boolean
-        get() = pB("introOutro", false)
+        get() = p.getBoolean("introOutro$ps", false)  // je Projekt, ohne Übernahme von anderen Logos
         set(v) = p.edit().putBoolean("introOutro$ps", v).apply()
+
+    /** Alter gemeinsamer Intro/Outro-Schalter → nur dem ersten Projekt geben */
+    fun migrateIntroOutroTo(logo: String) {
+        if (!p.contains("introOutro@$logo") && p.getBoolean("introOutro", false))
+            p.edit().putBoolean("introOutro@$logo", true).apply()
+    }
 
     /** #9 Untertitel automatisch einbrennen. */
     var subtitlesEnabled: Boolean
