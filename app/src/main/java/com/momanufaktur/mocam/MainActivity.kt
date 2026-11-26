@@ -1778,6 +1778,15 @@ class MainActivity : AppCompatActivity() {
         (if (isFrontCam) "Frontkamera" else "Rückkamera") + " · " + (if (videoMode) "Video" else "Foto")
 
     /** Lädt Position, Größe, Deckkraft und Drehung des Logos für die aktuelle Kamera und den Modus. */
+    /**
+     * Anderes Logo = anderes Projekt: Position, Größe, Deckkraft und Drehung dieses Projekts laden,
+     * statt die Werte des vorherigen Logos weiterzuverwenden (die sonst beim nächsten Speichern dort landen).
+     */
+    private fun onProjectChanged() {
+        loadLogoContextValues()
+        logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
+    }
+
     private fun loadLogoContextValues() {
         processor.logoCx = settings.logoCx
         processor.logoCy = settings.logoCy
@@ -1993,6 +2002,7 @@ class MainActivity : AppCompatActivity() {
                     settings.selectedLogo = savedName
                     loadedLogoName = savedName
                     applyLogo(bmp)
+                    onProjectChanged()
                     enableLogo()
                     refreshLogoLibrary()
                     if (gifFor(savedName) != null) {
@@ -2015,6 +2025,7 @@ class MainActivity : AppCompatActivity() {
                 settings.selectedLogo = file.name
                 loadedLogoName = file.name
                 applyLogo(bmp)
+                onProjectChanged()
                 playLogoAnimation()
                 updateFolderLabel()
                 enableLogo()
