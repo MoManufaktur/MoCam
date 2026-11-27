@@ -1225,6 +1225,17 @@ class MainActivity : AppCompatActivity() {
                 11f, Color.argb(170, 255, 255, 255)))
             uiField("z. B. MoManufaktur, MMES, Steinbergkirche", settings.subtitleWords) { settings.subtitleWords = it }
 
+            // Teleprompter-Text des Projekts
+            uiSection("📜 Teleprompter-Text")
+            val pt = settings.prompterText
+            editorContent.addView(uiText(
+                if (pt.isBlank()) "Noch kein Text – erscheint im 📜 Prompter, sobald dieses Logo gewählt ist."
+                else pt.replace('\n', ' ').let { if (it.length > 140) it.take(140) + " …" else it },
+                12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(uiChip(if (pt.isBlank()) "✎ Text schreiben …" else "✎ Text bearbeiten …") {
+                editPrompterText { openProjectEditor() }
+            }, wrapLp(0))
+
             // Copyright (eigenes Untermenü)
             uiSection("©️ Copyright")
             editorContent.addView(uiText(
@@ -1582,6 +1593,7 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun setupPrompter() {
+        settings.migratePrompterText()
         prompterView.text = settings.prompterText
         prompterView.textSizeSp = settings.prompterTextSize
         prompterSpeed.progress = settings.prompterSpeed
@@ -1615,11 +1627,52 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnPrompterSmaller).setOnClickListener { changePrompterSize(-4f) }
         findViewById<View>(R.id.btnPrompterBigger).setOnClickListener { changePrompterSize(4f) }
         findViewById<View>(R.id.btnPrompterEdit).setOnClickListener { editPrompterText() }
+        // Regler für die Durchsichtigkeit des Hintergrunds
+        val bgRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, dp(8), dp(4))
+        }
+        val bgLabel = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            minWidth = dp(118)
+            setShadowLayer(3f, 0f, 1f, Color.BLACK)
+        }
+        val bgSeek = SeekBar(this).apply {
+            max = 100
+            progress = settings.prompterBgAlpha
+            setOnSeekBarChangeListener(object : SimpleSeek() {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    applyPrompterBg(progress); bgLabel.text = "◐ Hintergrund $progress %"
+                    if (fromUser) settings.prompterBgAlpha = progress
+                }
+            })
+        }
+        bgRow.addView(bgLabel)
+        bgRow.addView(bgSeek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        (prompterBox as LinearLayout).addView(bgRow)
+        bgLabel.text = "◐ Hintergrund ${settings.prompterBgAlpha} %"
+        applyPrompterBg(settings.prompterBgAlpha)
+
         findViewById<View>(R.id.btnPrompterClose).setOnClickListener {
             prompterView.playing = false
             prompterBox.visibility = View.GONE
             updateUi()
         }
+    }
+
+    /** Hintergrund des Prompters: 0 % = durchsichtig, 100 % = wie bisher (abgedunkelt). Text bekommt Schatten. */
+    private fun applyPrompterBg(percent: Int) {
+        prompterBox.background?.mutate()?.alpha = (percent * 255 / 100).coerceIn(0, 255)
+        prompterView.shadow = percent < 60
+    }
+
+    /** Prompter-Text des aktuellen Projekts anzeigen (nach Logo-Wechsel). */
+    private fun loadProjectPrompter() {
+        prompterView.playing = false
+        prompterView.text = settings.prompterText
+        prompterView.reset()
     }
 
     /** Regler 0..100 -> 5..155 dp pro Sekunde */
@@ -1630,7 +1683,7 @@ class MainActivity : AppCompatActivity() {
         settings.prompterTextSize = prompterView.textSizeSp
     }
 
-    private fun editPrompterText() {
+    private fun editPrompterText(after: (() -> Unit)? = null) {
         val input = EditText(this).apply {
             setText(settings.prompterText)
             hint = "Dein Text für die Aufnahme …"
@@ -1649,6 +1702,7 @@ class MainActivity : AppCompatActivity() {
                 prompterView.playing = false
                 prompterView.text = t
                 prompterView.reset()
+                after?.invoke()
             }
             .show()
     }
@@ -1912,6 +1966,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onProjectChanged() {
         loadLogoContextValues()
+        loadProjectPrompter()
         logoAlphaBar.progress = (settings.logoAlpha * 100).roundToInt()
     }
 

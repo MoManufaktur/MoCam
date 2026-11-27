@@ -229,9 +229,24 @@ class Settings(ctx: Context) {
     private fun fixKey(front: Boolean, target: String) = "fix2_" + (if (front) "front_" else "rear_") + target
 
 
+    /** Teleprompter-Text je Projekt (Logo) – ohne Übernahme von anderen Logos */
     var prompterText: String
-        get() = p.getString("prompterText", "") ?: ""
-        set(v) = p.edit().putString("prompterText", v).apply()
+        get() = p.getString("prompterText$ps", "") ?: ""
+        set(v) = p.edit().putString("prompterText$ps", v).apply()
+
+    /** Alter gemeinsamer Prompter-Text → einmalig dem aktuell gewählten Projekt geben */
+    fun migratePrompterText() {
+        if (p.getBoolean("prompterMigrated", false)) return
+        val old = p.getString("prompterText", "") ?: ""
+        val e = p.edit().putBoolean("prompterMigrated", true)
+        if (old.isNotBlank() && !p.contains("prompterText$ps")) e.putString("prompterText$ps", old)
+        e.apply()
+    }
+
+    /** Deckkraft des Prompter-Hintergrunds in % (0 = durchsichtig) */
+    var prompterBgAlpha: Int
+        get() = int("prompterBgAlpha", 100)
+        set(v) = p.edit().putInt("prompterBgAlpha", v).apply()
 
     /** Tempo-Regler 0..100 */
     var prompterSpeed: Int

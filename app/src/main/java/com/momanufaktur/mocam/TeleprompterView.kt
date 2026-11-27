@@ -52,6 +52,14 @@ class TeleprompterView @JvmOverloads constructor(
         color = Color.WHITE
         setShadowLayer(4f, 0f, 0f, Color.BLACK)
     }
+    /** Stärkerer Schatten, wenn der Hintergrund (fast) durchsichtig ist – Text bleibt lesbar. */
+    var shadow: Boolean = false
+        set(v) {
+            field = v
+            textPaint.setShadowLayer(if (v) 10f else 4f, 0f, if (v) 2f else 0f, Color.BLACK)
+            invalidate()
+        }
+
     private val hintPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(170, 255, 255, 255)
         textSize = 15f * density
