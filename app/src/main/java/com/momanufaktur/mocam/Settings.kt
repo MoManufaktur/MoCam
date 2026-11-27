@@ -243,6 +243,11 @@ class Settings(ctx: Context) {
         e.apply()
     }
 
+    /** Prompter startet automatisch mit der Aufnahme (nach dem Selbstauslöser-Countdown) */
+    var prompterAutoStart: Boolean
+        get() = bool("prompterAutoStart", true)
+        set(v) = p.edit().putBoolean("prompterAutoStart", v).apply()
+
     /** Deckkraft des Prompter-Hintergrunds in % (0 = durchsichtig) */
     var prompterBgAlpha: Int
         get() = int("prompterBgAlpha", 100)

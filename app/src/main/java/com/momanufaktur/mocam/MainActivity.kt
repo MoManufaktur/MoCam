@@ -1627,6 +1627,28 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnPrompterSmaller).setOnClickListener { changePrompterSize(-4f) }
         findViewById<View>(R.id.btnPrompterBigger).setOnClickListener { changePrompterSize(4f) }
         findViewById<View>(R.id.btnPrompterEdit).setOnClickListener { editPrompterText() }
+        // Auto-Start: Prompter läuft mit dem Start der Aufnahme los (bei Selbstauslöser nach dem Countdown)
+        val autoChip = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setBackgroundResource(R.drawable.chip_bg)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+        }
+        fun styleAuto() {
+            autoChip.text = if (settings.prompterAutoStart) "⏯ Auto an" else "⏯ Auto aus"
+            autoChip.setBackgroundResource(if (settings.prompterAutoStart) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+            autoChip.setTextColor(if (settings.prompterAutoStart) Color.BLACK else Color.WHITE)
+        }
+        autoChip.setOnClickListener {
+            settings.prompterAutoStart = !settings.prompterAutoStart
+            styleAuto()
+            toast(if (settings.prompterAutoStart) "Prompter startet automatisch mit der Aufnahme (bei Timer nach dem Countdown)"
+                  else "Prompter startet nur über ▶")
+        }
+        styleAuto()
+        (btnPrompterPlay.parent as? LinearLayout)?.addView(autoChip, 1,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+
         // Regler für die Durchsichtigkeit des Hintergrunds
         val bgRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1863,7 +1885,7 @@ class MainActivity : AppCompatActivity() {
                     gifFired.clear()
                     if (settings.lowerEnabled) startLowerThird()
                     playLogoAnimation() // animiertes Logo: einmal abspielen, dann Startbild
-                    if (prompterActive()) {
+                    if (prompterActive() && settings.prompterAutoStart) {
                         applyPrompterAutoSpeed()
                         prompterView.playing = true
                     }
@@ -1876,7 +1898,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 is VideoRecordEvent.Resume -> {
                     isPaused = false
-                    if (prompterActive()) prompterView.playing = true
+                    if (prompterActive() && settings.prompterAutoStart) prompterView.playing = true
                     updateUi()
                 }
                 is VideoRecordEvent.Status -> {
