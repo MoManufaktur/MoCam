@@ -100,6 +100,9 @@ class TeleprompterView @JvmOverloads constructor(
 
     private fun readingLine() = height * 0.3f
 
+    /** Gesamte Scroll-Strecke des Textes in dp (0, solange noch nicht gelayoutet). */
+    fun scrollDistanceDp(): Float = maxOffset() / resources.displayMetrics.density
+
     private fun maxOffset(): Float = (layout?.height ?: 0).toFloat()
 
     private fun clampOffset() {
