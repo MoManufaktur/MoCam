@@ -80,9 +80,20 @@ class GifAnim private constructor(private val movie: android.graphics.Movie) : L
     }
 }
 
-/** Animiertes WebP über AnimatedImageDrawable (Android 9+), läuft genau einmal durch. */
+/**
+ * Animiertes WebP über AnimatedImageDrawable (Android 9+), läuft genau einmal durch.
+ * Das Drawable hält sich auf einer Software-Leinwand nicht zuverlässig an setBounds() und zeichnet dann in
+ * Originalgröße. Deshalb: schon beim Dekodieren auf max. 512 px verkleinern, in ein Zwischenbild in seiner
+ * eigenen Größe zeichnen und dieses selbst in die Zielgröße skalieren.
+ */
 class WebpAnim private constructor(private val d: Drawable) : LogoAnim {
     @Volatile private var done = false
+    private val iw = d.intrinsicWidth.coerceAtLeast(1)
+    private val ih = d.intrinsicHeight.coerceAtLeast(1)
+    private val tmp = Bitmap.createBitmap(iw, ih, Bitmap.Config.ARGB_8888).apply { density = Bitmap.DENSITY_NONE }
+    private val tmpCanvas = Canvas(tmp).apply { density = Bitmap.DENSITY_NONE }
+    private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+
     override fun start() {
         done = false
         if (Build.VERSION.SDK_INT >= 28 && d is AnimatedImageDrawable) {
@@ -96,14 +107,22 @@ class WebpAnim private constructor(private val d: Drawable) : LogoAnim {
     override fun isDone() = done
     override fun stop() { if (Build.VERSION.SDK_INT >= 28 && d is AnimatedImageDrawable) d.stop() }
     override fun draw(c: Canvas, w: Int, h: Int) {
-        d.setBounds(0, 0, w, h)
-        d.draw(c)
+        tmp.eraseColor(Color.TRANSPARENT)
+        d.setBounds(0, 0, iw, ih)
+        d.draw(tmpCanvas)
+        c.drawBitmap(tmp, null, Rect(0, 0, w, h), paint)
     }
 
     companion object {
+        private const val MAX_SIDE = 512
+
         fun load(f: File): WebpAnim? {
             if (Build.VERSION.SDK_INT < 28) return null
-            val d = android.graphics.ImageDecoder.decodeDrawable(android.graphics.ImageDecoder.createSource(f))
+            val d = android.graphics.ImageDecoder.decodeDrawable(android.graphics.ImageDecoder.createSource(f)) { decoder, info, _ ->
+                val sw = info.size.width; val sh = info.size.height
+                val sc = minOf(1f, MAX_SIDE.toFloat() / max(sw, sh))
+                if (sc < 1f) decoder.setTargetSize((sw * sc).toInt().coerceAtLeast(1), (sh * sc).toInt().coerceAtLeast(1))
+            }
             return if (d is AnimatedImageDrawable) WebpAnim(d) else null
         }
     }
