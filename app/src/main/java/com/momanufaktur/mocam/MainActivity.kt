@@ -1675,6 +1675,23 @@ class MainActivity : AppCompatActivity() {
         prompterView.reset()
     }
 
+    /**
+     * Mit Zeitlimit: Prompter-Tempo so wählen, dass der ganze Text genau in die Aufnahmezeit passt
+     * (Limit minus Intro/Outro, mit 5 % Reserve). Der Text startet dafür von vorn.
+     */
+    private fun applyPrompterAutoSpeed() {
+        if (settings.timeLimit == 0) return
+        val sec = effectiveLimit().toFloat()
+        val dist = prompterView.scrollDistanceDp()
+        if (sec <= 0f || dist <= 0f) return
+        val speed = dist / (sec * 0.95f)
+        prompterView.reset()
+        // erst den Regler setzen (sein Listener setzt ein gerundetes Tempo), dann das genaue Tempo
+        prompterSpeed.progress = ((speed - 5f) / 1.5f).roundToInt().coerceIn(0, 100)
+        prompterView.speedDp = speed
+        toast("Prompter-Tempo an ${effectiveLimit()} s Aufnahmezeit angepasst")
+    }
+
     /** Regler 0..100 -> 5..155 dp pro Sekunde */
     private fun speedFromSlider(p: Int) = 5f + p * 1.5f
 
@@ -1846,7 +1863,10 @@ class MainActivity : AppCompatActivity() {
                     gifFired.clear()
                     if (settings.lowerEnabled) startLowerThird()
                     playLogoAnimation() // animiertes Logo: einmal abspielen, dann Startbild
-                    if (prompterActive()) prompterView.playing = true
+                    if (prompterActive()) {
+                        applyPrompterAutoSpeed()
+                        prompterView.playing = true
+                    }
                     updateUi()
                 }
                 is VideoRecordEvent.Pause -> {
