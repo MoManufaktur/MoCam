@@ -1143,50 +1143,98 @@ class MainActivity : AppCompatActivity() {
     // ---------------- Untermenüs ----------------
 
     /** Projekteinstellungen: Ordner, Logo-Position, Bauchbinde, Copyright, Intro/Outro – alles je Logo. */
+    /** Großer Menüeintrag im Editor (wie auf der Einstellungs-Hauptseite): Titel, Kurzinfo, öffnet ein Untermenü. */
+    private fun editorEntry(title: String, info: String, onClick: () -> Unit) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.chip_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setOnClickListener { onClick() }
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        row.addView(uiText(title, 15f, Color.WHITE, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(uiText("›", 20f, getColor(R.color.accent), true))
+        box.addView(row)
+        if (info.isNotEmpty()) box.addView(uiText(info, 12f, Color.argb(190, 255, 255, 255)))
+        editorContent.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+    }
+
+    /** Neu zeichnen, wenn sich im offenen Projekt-Untermenü etwas von außen ändert (Ordner, Clip gewählt). */
+    private var projectRefresh: (() -> Unit)? = null
+
+    /** Öffnet ein Untermenü der Projekteinstellungen; „←“/„✓“ führen zurück zur Projekt-Übersicht. */
+    private fun projectSub(open: () -> Unit) {
+        editorReturn = { openProjectEditor() }
+        projectRefresh = null
+        open()
+    }
+
+    private fun openLogoPanelFromProject() {
+        editorPanel.visibility = View.GONE
+        projectEditorOpen = false
+        projectRefresh = null
+        logoPanelToProject = true
+        openLogoPanel()
+    }
+
+    private fun shortText(t: String, max: Int = 70) =
+        t.replace('\n', ' ').trim().let { if (it.length > max) it.take(max) + " …" else it }
+
+    /** Projekteinstellungen: Übersicht mit Einträgen, jeder öffnet sein Untermenü (wie die Einstellungs-Hauptseite). */
     private fun openProjectEditor() {
         openEditor("📁 Projekteinstellungen") {
             projectEditorOpen = true
+            projectRefresh = { openProjectEditor() }
             val logo = settings.selectedLogo
             if (logo == null) {
                 editorContent.addView(uiText("Ein Projekt gehört immer zu einem Logo. Wähle zuerst ein Logo – " +
                     "danach kannst du Speicherordner, Logo-Position, Bauchbinde, Copyright und Intro/Outro für dieses Projekt einstellen.",
                     13f, Color.argb(220, 255, 255, 255)))
-                editorContent.addView(uiChip("🏷 Logo wählen …") {
-                    editorPanel.visibility = View.GONE
-                    projectEditorOpen = false
-                    logoPanelToProject = true
-                    openLogoPanel()
-                }, wrapLp(0))
+                editorContent.addView(uiChip("🏷 Logo wählen …") { openLogoPanelFromProject() }, wrapLp(0))
                 return@openEditor
             }
             editorContent.addView(uiText("Projekt: ${projectName(logo)}", 15f, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
             editorContent.addView(uiText("Anderes Logo wählen = anderes Projekt. Alles hier gilt nur für dieses Projekt.",
                 11f, Color.argb(170, 255, 255, 255)))
 
-            // Speicherort
-            uiSection("📂 Speicherort")
-            val fl = folderLabel(settings.folderForLogo(logo))
-            editorContent.addView(uiText("Fotos: Bilder/$fl · Videos: Filme/$fl · Untertitel & Marker: Download/$fl",
-                12f, Color.argb(200, 255, 255, 255)))
-            editorContent.addView(uiChip("📁 Ordner: ${folderLabel(settings.folderForLogo(logo))} – ändern") { chooseFolderForLogo() }, wrapLp(0))
+            editorEntry("🏷 Logo", if (animFor(logo) != null) "Animiert · Position, Größe, Wiederholungen" else "Position, Größe, Drehung") {
+                projectSub { openProjectLogoEditor() }
+            }
+            editorEntry("📂 Speicherort", "Ordner: ${folderLabel(settings.folderForLogo(logo))}") {
+                projectSub { openProjectFolderEditor() }
+            }
+            editorEntry("🪪 Bauchbinde", (if (settings.lowerEnabled) "An · " else "Aus · ") + "${settings.lowerName} · ${settings.lowerTitle}") {
+                projectSub { openLowerThirdEditor() }
+            }
+            val intro = introFile().exists(); val outro = outroFile().exists()
+            editorEntry("🎬 Intro & Outro", (if (settings.introOutroEnabled) "An" else "Aus") + " · " +
+                listOfNotNull("Intro".takeIf { intro }, "Outro".takeIf { outro }).joinToString(" + ").ifEmpty { "keine Clips" }) {
+                projectSub { openProjectClipsEditor() }
+            }
+            val pt = settings.prompterText
+            editorEntry("📜 Teleprompter-Text", if (pt.isBlank()) "Noch kein Text" else shortText(pt)) {
+                editPrompterText { openProjectEditor() }
+            }
+            val words = settings.subtitleWords
+            editorEntry("📝 Wortliste für Untertitel", if (words.isBlank()) "Noch keine Begriffe" else shortText(words)) {
+                projectSub { openProjectWordsEditor() }
+            }
+            editorEntry("©️ Copyright",
+                if (settings.copyrightEnabled) "An · ${settings.copyrightAuthor} · ${settings.copyrightText}" else "Aus") {
+                projectSub { openCopyrightEditor() }
+            }
+        }
+    }
 
-            // Logo
-            uiSection("🏷 Logo")
-            editorContent.addView(uiText("Position, Größe und Drehung je Foto/Video und Rück-/Frontkamera.",
-                12f, Color.argb(200, 255, 255, 255)))
-            val logoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, 0) }
-            logoRow.addView(uiChip("🏷 Logo einstellen …") {
-                editorPanel.visibility = View.GONE
-                projectEditorOpen = false
-                logoPanelToProject = true
-                openLogoPanel()
-            }, wrapLp(8))
-            logoRow.addView(uiChip("Logo / Projekt wechseln …") {
-                editorPanel.visibility = View.GONE
-                projectEditorOpen = false
-                logoPanelToProject = true
-                openLogoPanel()
-            }, wrapLp(0))
+    private fun openProjectLogoEditor() {
+        val logo = settings.selectedLogo ?: return openProjectEditor()
+        openEditor("🏷 Logo") {
+            editorContent.addView(uiText("Position, Größe, Deckkraft und Drehung je Foto/Video und Rück-/Frontkamera. " +
+                "Lange auf ein Logo drücken = austauschen oder löschen.", 12f, Color.argb(200, 255, 255, 255)))
+            val logoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, 0) }
+            logoRow.addView(uiChip("🏷 Logo einstellen …") { openLogoPanelFromProject() }, wrapLp(8))
+            logoRow.addView(uiChip("Logo / Projekt wechseln …") { openLogoPanelFromProject() }, wrapLp(0))
             editorContent.addView(logoRow)
             if (animFor(logo) != null) {
                 uiSection("✨ Animiertes Logo")
@@ -1209,64 +1257,52 @@ class MainActivity : AppCompatActivity() {
                 gifRow(3, settings.gif3On, settings.gif3Pct, { settings.gif3On = it }, { settings.gif3Pct = it })
                 editorContent.addView(uiChip("▶ Animation testen") { playLogoAnimation() }, wrapLp(0))
             }
+        }
+    }
 
-            // Bauchbinde
-            uiSection("🪪 Bauchbinde")
-            editorContent.addView(uiText("${settings.lowerName} · ${settings.lowerTitle}", 12f, Color.argb(200, 255, 255, 255)))
-            editorContent.addView(uiChip("🪪 Bauchbinde gestalten …") {
-                projectEditorOpen = false
-                editorReturn = { openProjectEditor() }
-                openLowerThirdEditor()
-            }, wrapLp(0))
+    private fun openProjectFolderEditor() {
+        val logo = settings.selectedLogo ?: return openProjectEditor()
+        openEditor("📂 Speicherort") {
+            projectRefresh = { openProjectFolderEditor() }
+            val fl = folderLabel(settings.folderForLogo(logo))
+            editorContent.addView(uiText("Fotos: Bilder/$fl\nVideos: Filme/$fl\nUntertitel & Marker: Download/$fl",
+                13f, Color.argb(220, 255, 255, 255)))
+            editorContent.addView(uiChip("📁 Ordner: $fl – ändern") { chooseFolderForLogo() }, wrapLp(0))
+        }
+    }
 
-            // Wortliste für Untertitel
-            uiSection("📝 Wortliste für Untertitel")
-            editorContent.addView(uiText("Namen und Fachbegriffe, durch Komma getrennt – Whisper schreibt sie dann richtig.",
-                11f, Color.argb(170, 255, 255, 255)))
+    private fun openProjectWordsEditor() {
+        openEditor("📝 Wortliste") {
+            editorContent.addView(uiText("Namen und Fachbegriffe dieses Projekts, durch Komma getrennt – Whisper schreibt sie " +
+                "dann in den Untertiteln richtig.", 12f, Color.argb(200, 255, 255, 255)))
             uiField("z. B. MoManufaktur, MMES, Steinbergkirche", settings.subtitleWords) { settings.subtitleWords = it }
+        }
+    }
 
-            // Teleprompter-Text des Projekts
-            uiSection("📜 Teleprompter-Text")
-            val pt = settings.prompterText
-            editorContent.addView(uiText(
-                if (pt.isBlank()) "Noch kein Text – erscheint im 📜 Prompter, sobald dieses Logo gewählt ist."
-                else pt.replace('\n', ' ').let { if (it.length > 140) it.take(140) + " …" else it },
-                12f, Color.argb(200, 255, 255, 255)))
-            editorContent.addView(uiChip(if (pt.isBlank()) "✎ Text schreiben …" else "✎ Text bearbeiten …") {
-                editPrompterText { openProjectEditor() }
-            }, wrapLp(0))
-
-            // Copyright (eigenes Untermenü)
-            uiSection("©️ Copyright")
-            editorContent.addView(uiText(
-                if (settings.copyrightEnabled) "An · ${settings.copyrightAuthor} · ${settings.copyrightText}" else "Aus",
-                12f, Color.argb(200, 255, 255, 255)))
-            editorContent.addView(uiChip("©️ Copyright einstellen …") {
-                projectEditorOpen = false
-                editorReturn = { openProjectEditor() }
-                openCopyrightEditor()
-            }, wrapLp(0))
-
-            // Intro & Outro
-            uiSection("🎬 Intro & Outro")
+    private fun openProjectClipsEditor() {
+        openEditor("🎬 Intro & Outro") {
+            projectRefresh = { openProjectClipsEditor() }
             editorContent.addView(SwitchCompat(this).apply {
                 text = "An jedes Video dieses Projekts anhängen"
                 setTextColor(Color.WHITE)
                 isChecked = settings.introOutroEnabled
                 setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
             })
+            if (settings.timeLimit > 0) editorContent.addView(uiText(
+                "Zeitlimit aktiv: Intro und Outro werden von der Aufnahmezeit abgezogen (jetzt ${effectiveLimit()} s Aufnahme).",
+                11f, Color.argb(170, 255, 255, 255)))
             fun clipRow(label: String, kind: String, file: File, pick: () -> Unit) {
                 val exists = file.exists()
                 editorContent.addView(uiText(
-                    "$label: " + if (exists) (settings.clipName(kind) ?: "übernommener Clip") else "– keiner gewählt –",
-                    12f, if (exists) Color.WHITE else Color.argb(160, 255, 255, 255)).apply { setPadding(0, dp(6), 0, 0) })
+                    "$label: " + if (exists) (settings.clipName(kind) ?: "übernommener Clip") + " (${clipSeconds(file)} s)" else "– keiner gewählt –",
+                    13f, if (exists) Color.WHITE else Color.argb(160, 255, 255, 255)).apply { setPadding(0, dp(10), 0, 0) })
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, 0) }
                 if (exists) row.addView(uiChip("▶ Abspielen") { playClip(file, label) }, wrapLp(6))
                 row.addView(uiChip(if (exists) "Ändern" else "$label wählen") { pick() }, wrapLp(6))
                 if (exists) row.addView(uiChip("Entfernen") {
                     file.delete(); settings.setClipName(kind, null)
                     toast("$label für dieses Projekt entfernt")
-                    openProjectEditor()
+                    openProjectClipsEditor()
                 }, wrapLp(0))
                 editorContent.addView(row)
             }
@@ -2731,6 +2767,7 @@ class MainActivity : AppCompatActivity() {
         overlay.lowerPinned = false
         overlay.subPreviewText = null
         projectEditorOpen = false
+        projectRefresh = null
         val back = editorReturn
         editorReturn = null
         when {
@@ -3128,7 +3165,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 toast(if (ok) "Gespeichert" else "Clip konnte nicht geladen werden")
                 if (settingsPanel.visibility == View.VISIBLE) buildSettings()
-                if (projectEditorOpen) openProjectEditor()
+                projectRefresh?.invoke()
             }
         }
     }
@@ -3797,7 +3834,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateFolderLabel() {
         val f = settings.folderForLogo(settings.selectedLogo)
         findViewById<TextView>(R.id.logoFolderLabel).text = "📁 Ordner: " + folderLabel(f)
-        if (projectEditorOpen) openProjectEditor()
+        projectRefresh?.invoke()
     }
 
     private fun chooseFolderForLogo() {
