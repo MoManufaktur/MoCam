@@ -29,6 +29,9 @@ jobs:
       - name: Native Bibliotheken prüfen
         run: unzip -l app/build/outputs/apk/debug/*.apk | grep "\.so" || true
 
+      - name: Modell-Adressen prüfen
+        continue-on-error: true
+        run: curl -sIL -o /dev/null -w "MediaPipe-Modell: %{http_code} %{size_download}\n" https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite
       - name: APK hochladen
         uses: actions/upload-artifact@v5
         with:

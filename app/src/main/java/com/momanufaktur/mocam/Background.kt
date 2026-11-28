@@ -14,14 +14,88 @@ import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.Segmentation
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.ByteBufferExtractor
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
+import java.nio.channels.FileChannel
+import java.util.concurrent.Executors
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-/** Hintergrund ersetzen (wie Zoom): Personen-Erkennung mit ML Kit, live und für Fotos. */
+/**
+ * Hintergrund ersetzen (wie Zoom). Zwei Erkennungen zur Wahl:
+ *  - "mlkit": Google ML Kit Selfie Segmentation (in der App enthalten, schnell)
+ *  - "mediapipe": MediaPipe Image Segmenter mit dem Mehrklassen-Selfie-Modell (Haare/Gesicht/Körper/Kleidung,
+ *    genauere Ränder; Modell ~16 MB wird einmalig geladen)
+ */
 object Background {
+    const val ENGINE_MLKIT = "mlkit"
+    const val ENGINE_MEDIAPIPE = "mediapipe"
+    val ENGINES = listOf(ENGINE_MLKIT to "⚡ ML Kit – schnell", ENGINE_MEDIAPIPE to "🎯 MediaPipe – genauer")
+    private const val MP_URL =
+        "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
+
+    /** Aktive Erkennung (von der Activity gesetzt). */
+    @Volatile var engine = ENGINE_MLKIT
+    private lateinit var appCtx: Context
+    fun init(ctx: Context, eng: String) { appCtx = ctx.applicationContext; engine = eng }
+
+    fun mpModelFile(ctx: Context) = File(dir(ctx), "selfie_multiclass_256x256.tflite")
+    fun mpReady(ctx: Context) = mpModelFile(ctx).length() > 1_000_000L
+    fun downloadMp(ctx: Context, onProgress: (Int) -> Unit) =
+        Subtitles.download(MP_URL, mpModelFile(ctx), 1_000_000L, onProgress)
+
+    private val mpExec = Executors.newSingleThreadExecutor()
+    @Volatile private var mp: ImageSegmenter? = null
+    private var mpFailed = false
+
+    /** MediaPipe-Segmenter (lazy, nur auf mpExec benutzen). null = nicht verfügbar → ML Kit. */
+    private fun mpSegmenter(): ImageSegmenter? {
+        mp?.let { return it }
+        if (mpFailed || !::appCtx.isInitialized || !mpReady(appCtx)) return null
+        return try {
+            val buf = java.io.FileInputStream(mpModelFile(appCtx)).channel.use {
+                it.map(FileChannel.MapMode.READ_ONLY, 0, it.size())
+            }
+            val opts = ImageSegmenter.ImageSegmenterOptions.builder()
+                .setBaseOptions(BaseOptions.builder().setModelAssetBuffer(buf).build())
+                .setRunningMode(RunningMode.IMAGE)
+                .setOutputConfidenceMasks(true)
+                .setOutputCategoryMask(false)
+                .build()
+            ImageSegmenter.createFromOptions(appCtx, opts).also { mp = it }
+        } catch (e: Throwable) {
+            Log.w("MoCam", "MediaPipe-Start", e); mpFailed = true; null
+        }
+    }
+
+    /** MediaPipe: Wahrscheinlichkeit „Person“ je Pixel (1 − Hintergrund) als FloatArray, oder null. */
+    private fun mpPerson(bmp: Bitmap): Triple<FloatArray, Int, Int>? {
+        val seg = mpSegmenter() ?: return null
+        return try {
+            val res = seg.segment(BitmapImageBuilder(bmp).build())
+            val masks = res.confidenceMasks().orElse(null) ?: return null
+            val bgMask = masks[0]                       // Klasse 0 = Hintergrund
+            val w = bgMask.width; val h = bgMask.height
+            val fb = ByteBufferExtractor.extract(bgMask).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            val out = FloatArray(w * h) { 1f - fb.get(it) }
+            masks.forEach { it.close() }
+            Triple(out, w, h)
+        } catch (e: Throwable) {
+            Log.w("MoCam", "MediaPipe-Segmentierung", e); null
+        }
+    }
+
+    /** Wechsel der Erkennung: MediaPipe neu laden lassen (z. B. nach Modell-Download). */
+    fun resetEngine() {
+        mpExec.execute { try { mp?.close() } catch (_: Throwable) {}; mp = null; mpFailed = false }
+    }
+
     private val live by lazy {
         Segmentation.getClient(SelfieSegmenterOptions.Builder()
             .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE).build())
@@ -37,6 +111,21 @@ object Background {
 
     /** Live-Erkennung für den GL-Prozessor: Bild rein, 1-Byte-Maske über Callback zurück. */
     fun liveSegmenter(): (Bitmap, (ByteBuffer?, Int, Int) -> Unit) -> Unit = { bmp, cb ->
+        if (engine == ENGINE_MEDIAPIPE && ::appCtx.isInitialized && mpReady(appCtx)) {
+            mpExec.execute {
+                val r = mpPerson(bmp)
+                if (r == null) { mlkitLive(bmp, cb); return@execute }
+                val (f, w, h) = r
+                val out = ByteBuffer.allocateDirect(w * h).order(ByteOrder.nativeOrder())
+                for (v in f) out.put((v.coerceIn(0f, 1f) * 255f).toInt().toByte())
+                out.position(0)
+                bmp.recycle()
+                cb(out, w, h)
+            }
+        } else mlkitLive(bmp, cb)
+    }
+
+    private fun mlkitLive(bmp: Bitmap, cb: (ByteBuffer?, Int, Int) -> Unit) {
         live.process(InputImage.fromBitmap(bmp, 0))
             .addOnSuccessListener { m ->
                 val w = m.width; val h = m.height
@@ -70,12 +159,21 @@ object Background {
             val sc = 512f / max(photo.width, photo.height)
             val small = Bitmap.createScaledBitmap(photo, (photo.width * sc).roundToInt().coerceAtLeast(1),
                 (photo.height * sc).roundToInt().coerceAtLeast(1), true)
-            val m = Tasks.await(single.process(InputImage.fromBitmap(small, 0)))
-            val mw = m.width; val mh = m.height
-            val buf = m.buffer.apply { rewind() }
+            val mpRes = if (engine == ENGINE_MEDIAPIPE)
+                try { mpExec.submit<Triple<FloatArray, Int, Int>?> { mpPerson(small) }.get() } catch (e: Exception) { null }
+            else null
+            val probs: FloatArray; val mw: Int; val mh: Int
+            if (mpRes != null) {
+                probs = mpRes.first; mw = mpRes.second; mh = mpRes.third
+            } else {
+                val m = Tasks.await(single.process(InputImage.fromBitmap(small, 0)))
+                mw = m.width; mh = m.height
+                val buf = m.buffer.apply { rewind() }
+                probs = FloatArray(mw * mh) { buf.float }
+            }
             val px = IntArray(mw * mh)
             for (i in px.indices) {
-                val v = buf.float
+                val v = probs[i]
                 // weicher Übergang wie im Live-Bild
                 val t = ((v - 0.35f) / 0.4f).coerceIn(0f, 1f)
                 val a = (t * t * (3 - 2 * t) * 255f).toInt()

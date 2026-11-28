@@ -60,7 +60,7 @@ object Subtitles {
         return try { download(VAD_URL, f, 200_000L) {}; true } catch (e: Exception) { false }
     }
 
-    private fun download(url: String, target: File, minBytes: Long, onProgress: (Int) -> Unit) {
+    internal fun download(url: String, target: File, minBytes: Long, onProgress: (Int) -> Unit) {
         val tmp = File(target.path + ".part")
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.instanceFollowRedirects = true

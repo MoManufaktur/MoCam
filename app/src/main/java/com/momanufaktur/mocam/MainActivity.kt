@@ -719,6 +719,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupPrompter()
+        Background.init(this, settings.bgEngine)
         fxState.segmenter = Background.liveSegmenter()
         applyBackground()
         updateUi()
@@ -1056,7 +1057,8 @@ class MainActivity : AppCompatActivity() {
 
         // Hintergrund ersetzen
         entry("🖼 Hintergrund", (if (settings.bgEnabled) "An · " else "Aus · ") +
-            listOf("", "Weichzeichnen", "Foto", "Video")[settings.bgType.coerceIn(1, 3)],
+            listOf("", "Weichzeichnen", "Foto", "Video")[settings.bgType.coerceIn(1, 3)] +
+                (if (settings.bgEngine == Background.ENGINE_MEDIAPIPE) " · MediaPipe" else " · ML Kit"),
             QuickToggle({ settings.bgEnabled }, ::setBackgroundEnabled)) {
             openBackgroundEditor()
         }
@@ -1539,6 +1541,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setBgEngine(e: String) {
+        settings.bgEngine = e
+        Background.engine = e
+        Background.resetEngine()
+        if (e == Background.ENGINE_MEDIAPIPE && !Background.mpReady(this)) downloadMpModel()
+        else openBackgroundEditor()
+    }
+
+    private var mpDownloading = false
+    private fun downloadMpModel() {
+        if (mpDownloading) return
+        mpDownloading = true
+        toast("MediaPipe-Modell wird geladen …")
+        openBackgroundEditor()
+        bg.execute {
+            val ok = try {
+                var last = -1
+                Background.downloadMp(this) { pr ->
+                    if (pr / 25 != last) { last = pr / 25; runOnUiThread { toast("MediaPipe-Modell: $pr %") } }
+                }
+                true
+            } catch (e: Exception) { Log.w(TAG, "MediaPipe-Download", e); false }
+            runOnUiThread {
+                mpDownloading = false
+                Background.resetEngine()
+                toast(if (ok) "✓ MediaPipe bereit" else "Download fehlgeschlagen – Internet prüfen")
+                if (editorPanel.visibility == View.VISIBLE) openBackgroundEditor()
+            }
+        }
+    }
+
     private fun openBackgroundEditor() {
         openEditor("🖼 Hintergrund") {
             editorContent.addView(uiText(
@@ -1577,6 +1610,22 @@ class MainActivity : AppCompatActivity() {
                         11f, Color.argb(170, 255, 255, 255)))
                 }
             }
+            uiSection("Erkennung")
+            val engs = Background.ENGINES
+            uiChoice(engs.map { it.second }, engs.indexOfFirst { it.first == settings.bgEngine }.coerceAtLeast(0)) { i ->
+                setBgEngine(engs[i].first)
+            }
+            val mpOk = Background.mpReady(this)
+            editorContent.addView(uiText(
+                if (settings.bgEngine == Background.ENGINE_MLKIT)
+                    "ML Kit ist in der App enthalten und braucht wenig Rechenleistung – gut für längere Videos."
+                else if (mpOk)
+                    "MediaPipe erkennt Haare, Gesicht, Körper und Kleidung getrennt – sauberere Ränder, dafür etwas mehr Akku und Wärme."
+                else "MediaPipe-Modell fehlt noch (ca. 16 MB). Bis es geladen ist, wird ML Kit verwendet.",
+                11f, Color.argb(170, 255, 255, 255)))
+            if (settings.bgEngine == Background.ENGINE_MEDIAPIPE && !mpOk)
+                editorContent.addView(uiChip("⬇ MediaPipe-Modell laden (16 MB)") { downloadMpModel() }, wrapLp(0))
+
             uiSection("Falls der Hintergrund falsch sitzt")
             editorContent.addView(uiText("Liegt die Freistellung verdreht oder gespiegelt neben dir, hier die Ausrichtung der " +
                 "Erkennung ändern (wie bei den Grundeinstellungen).", 11f, Color.argb(170, 255, 255, 255)))

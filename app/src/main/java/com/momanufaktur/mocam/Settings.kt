@@ -196,6 +196,10 @@ class Settings(ctx: Context) {
         get() = p.getString("bgVideoName", "") ?: ""
         set(v) = p.edit().putString("bgVideoName", v).apply()
     val bgModeNow: Int get() = if (bgEnabled) bgType else 0
+    /** Erkennung: "mlkit" (eingebaut, schnell) oder "mediapipe" (genauer, Modell wird geladen) */
+    var bgEngine: String
+        get() = p.getString("bgEngine", "mlkit") ?: "mlkit"
+        set(v) = p.edit().putString("bgEngine", v).apply()
 
     /** Ringlicht automatisch regeln */
     var lightAuto: Boolean
