@@ -567,13 +567,8 @@ class MainActivity : AppCompatActivity() {
             updateUi()
         }
         btnLower.setOnClickListener {
-            settings.lowerEnabled = !settings.lowerEnabled
-            if (settings.lowerEnabled) {
-                applyLowerThird()
-                previewLowerThird()
-                toast("Bauchbinde an – Text in ⚙️ ändern")
-            }
-            updateUi()
+            setLowerEnabled(!settings.lowerEnabled)
+            if (settings.lowerEnabled) toast("Bauchbinde an – Text in ⚙️ ändern")
         }
         applyLowerThird()
         btnLimit.setOnClickListener {
@@ -618,15 +613,7 @@ class MainActivity : AppCompatActivity() {
             updateUi()
             bindCamera()
         }
-        btnLogo.setOnClickListener {
-            val on = !settings.logoEnabled
-            settings.logoEnabled = on
-            processor.logoEnabled = on
-            overlay.showLogo = on
-            logoSwitch.isChecked = on
-            if (on && logoBitmap == null) toast("Noch kein Logo gewählt – ⚙️ → Logo einstellen")
-            updateUi()
-        }
+        btnLogo.setOnClickListener { setLogoEnabled(!settings.logoEnabled) }
         btnSettings.setOnClickListener {
             if (settingsPanel.visibility == View.VISIBLE) closeSettings()
         if (editorPanel.visibility == View.VISIBLE) {
@@ -1041,19 +1028,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         /** Großer Menüeintrag: Titel + Kurzinfo, öffnet ein Untermenü. */
-        fun entry(title: String, info: String, onClick: () -> Unit) {
-            val box = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundResource(R.drawable.chip_bg)
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                setOnClickListener { onClick() }
-            }
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            row.addView(text(title, 15f, Color.WHITE, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(text("›", 20f, getColor(R.color.accent), true))
-            box.addView(row)
-            if (info.isNotEmpty()) box.addView(text(info, 12f, Color.argb(190, 255, 255, 255)))
-            settingsContent.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+        fun entry(title: String, info: String, toggle: QuickToggle? = null, onClick: () -> Unit) {
+            settingsContent.addView(menuEntry(title, info, toggle, { buildSettings() }, onClick),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         }
 
@@ -1072,13 +1049,15 @@ class MainActivity : AppCompatActivity() {
             (if (settings.subtitlesEnabled) "An" else "Aus") + " · " +
                 (Subtitles.ENGINES.firstOrNull { it.first == settings.subtitleEngine }?.second ?: "") + " · " +
                 subModeName(settings.subtitleMode) +
-                (if (Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine)) "" else " · Sprachmodell fehlt")) {
+                (if (Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine)) "" else " · Sprachmodell fehlt"),
+            QuickToggle({ settings.subtitlesEnabled }, ::setSubtitlesEnabled)) {
             openSubtitleEditor()
         }
 
         // Hintergrund ersetzen
         entry("🖼 Hintergrund", (if (settings.bgEnabled) "An · " else "Aus · ") +
-            listOf("", "Weichzeichnen", "Foto", "Video")[settings.bgType.coerceIn(1, 3)]) {
+            listOf("", "Weichzeichnen", "Foto", "Video")[settings.bgType.coerceIn(1, 3)],
+            QuickToggle({ settings.bgEnabled }, ::setBackgroundEnabled)) {
             openBackgroundEditor()
         }
 
@@ -1163,20 +1142,99 @@ class MainActivity : AppCompatActivity() {
 
     /** Projekteinstellungen: Ordner, Logo-Position, Bauchbinde, Copyright, Intro/Outro – alles je Logo. */
     /** Großer Menüeintrag im Editor (wie auf der Einstellungs-Hauptseite): Titel, Kurzinfo, öffnet ein Untermenü. */
-    private fun editorEntry(title: String, info: String, onClick: () -> Unit) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+    private fun editorEntry(title: String, info: String, toggle: QuickToggle? = null, onClick: () -> Unit) {
+        editorContent.addView(menuEntry(title, info, toggle, { projectRefresh?.invoke() }, onClick),
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+    }
+
+    /** Schnell-Schalter rechts in einem Menüeintrag: liest/schreibt denselben Zustand wie Top-Leiste und Untermenü. */
+    class QuickToggle(val isOn: () -> Boolean, val set: (Boolean) -> Unit)
+
+    /**
+     * Menüeintrag: Titel + Kurzinfo, Tippen öffnet das Untermenü.
+     * Mit [toggle] sitzt rechts ein Schalter (statt „›“), der das Feature sofort an/aus schaltet.
+     */
+    private fun menuEntry(title: String, info: String, toggle: QuickToggle?, refresh: () -> Unit, onClick: () -> Unit): View {
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setBackgroundResource(R.drawable.chip_bg)
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setPadding(dp(14), dp(10), dp(8), dp(10))
             setOnClickListener { onClick() }
         }
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        row.addView(uiText(title, 15f, Color.WHITE, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(uiText("›", 20f, getColor(R.color.accent), true))
-        box.addView(row)
-        if (info.isNotEmpty()) box.addView(uiText(info, 12f, Color.argb(190, 255, 255, 255)))
-        editorContent.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.addView(uiText(title, 15f, Color.WHITE, true))
+        head.addView(uiText("  ›", 18f, getColor(R.color.accent), true))
+        texts.addView(head)
+        if (info.isNotEmpty()) texts.addView(uiText(info, 12f, Color.argb(190, 255, 255, 255)))
+        outer.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (toggle != null) {
+            val on = toggle.isOn()
+            outer.addView(View(this).apply { setBackgroundColor(Color.argb(60, 255, 255, 255)) },
+                LinearLayout.LayoutParams(dp(1), dp(32)).apply { marginStart = dp(8); marginEnd = dp(4) })
+            outer.addView(SwitchCompat(this).apply {
+                isChecked = on
+                contentDescription = "$title an/aus"
+                setOnCheckedChangeListener { v, c ->
+                    v.isEnabled = false
+                    toggle.set(c)
+                    v.post { refresh() }
+                }
+            })
+        } else {
+            head.removeViewAt(1)
+            outer.addView(uiText("›", 20f, getColor(R.color.accent), true).apply { setPadding(dp(8), 0, dp(6), 0) })
+        }
+        return outer
+    }
+
+    // ---- gemeinsame An/Aus-Funktionen (Top-Leiste, Schnell-Schalter, Untermenüs) ----
+
+    private fun setLogoEnabled(on: Boolean) {
+        settings.logoEnabled = on
+        processor.logoEnabled = on
+        overlay.showLogo = on
+        if (logoSwitch.isChecked != on) logoSwitch.isChecked = on
+        if (on && logoBitmap == null) toast("Noch kein Logo gewählt – ⚙️ → Projekteinstellungen → Logo")
+        updateUi()
+    }
+
+    private fun setLowerEnabled(on: Boolean, preview: Boolean = true) {
+        settings.lowerEnabled = on
+        if (on) {
+            applyLowerThird()
+            if (preview) previewLowerThird()
+        }
+        updateUi()
+    }
+
+    private fun setSubtitlesEnabled(on: Boolean) {
+        settings.subtitlesEnabled = on
+        if (on && !Subtitles.isModelReady(this, settings.subtitleLang, settings.subtitleEngine))
+            toast("Bitte zuerst das Sprachmodell laden (Untertitel → Sprachmodell)")
+        updateUi()
+    }
+
+    private fun setIntroOutroEnabled(on: Boolean) {
+        settings.introOutroEnabled = on
+        updateUi()
+    }
+
+    private fun setCopyrightEnabled(on: Boolean) {
+        settings.copyrightEnabled = on
+        updateUi()
+    }
+
+    private fun setPrompterVisible(on: Boolean) {
+        if (on) {
+            prompterBox.visibility = View.VISIBLE
+        } else {
+            prompterView.playing = false
+            prompterBox.visibility = View.GONE
+        }
+        updateUi()
     }
 
     /** Neu zeichnen, wenn sich im offenen Projekt-Untermenü etwas von außen ändert (Ordner, Clip gewählt). */
@@ -1217,22 +1275,28 @@ class MainActivity : AppCompatActivity() {
             editorContent.addView(uiText("Anderes Logo wählen = anderes Projekt. Alles hier gilt nur für dieses Projekt.",
                 11f, Color.argb(170, 255, 255, 255)))
 
-            editorEntry("🏷 Logo", if (animFor(logo) != null) "Animiert · Position, Größe, Wiederholungen" else "Position, Größe, Drehung") {
+            editorEntry("🏷 Logo", (if (settings.logoEnabled) "An · " else "Aus · ") +
+                (if (animFor(logo) != null) "Animiert · Position, Größe, Wiederholungen" else "Position, Größe, Drehung"),
+                QuickToggle({ settings.logoEnabled }, ::setLogoEnabled)) {
                 projectSub { openProjectLogoEditor() }
             }
             editorEntry("📂 Speicherort", "Ordner: ${folderLabel(settings.folderForLogo(logo))}") {
                 projectSub { openProjectFolderEditor() }
             }
-            editorEntry("🪪 Bauchbinde", (if (settings.lowerEnabled) "An · " else "Aus · ") + "${settings.lowerName} · ${settings.lowerTitle}") {
+            editorEntry("🪪 Bauchbinde", (if (settings.lowerEnabled) "An · " else "Aus · ") + "${settings.lowerName} · ${settings.lowerTitle}",
+                QuickToggle({ settings.lowerEnabled }) { setLowerEnabled(it, preview = false) }) {
                 projectSub { openLowerThirdEditor() }
             }
             val intro = introFile().exists(); val outro = outroFile().exists()
             editorEntry("🎬 Intro & Outro", (if (settings.introOutroEnabled) "An" else "Aus") + " · " +
-                listOfNotNull("Intro".takeIf { intro }, "Outro".takeIf { outro }).joinToString(" + ").ifEmpty { "keine Clips" }) {
+                listOfNotNull("Intro".takeIf { intro }, "Outro".takeIf { outro }).joinToString(" + ").ifEmpty { "keine Clips" },
+                QuickToggle({ settings.introOutroEnabled }, ::setIntroOutroEnabled)) {
                 projectSub { openProjectClipsEditor() }
             }
             val pt = settings.prompterText
-            editorEntry("📜 Teleprompter-Text", if (pt.isBlank()) "Noch kein Text" else shortText(pt)) {
+            editorEntry("📜 Teleprompter", (if (prompterActive()) "Eingeblendet · " else "Ausgeblendet · ") +
+                (if (pt.isBlank()) "Noch kein Text" else shortText(pt)),
+                QuickToggle({ prompterActive() }, ::setPrompterVisible)) {
                 editPrompterText { openProjectEditor() }
             }
             val words = settings.subtitleWords
@@ -1240,7 +1304,8 @@ class MainActivity : AppCompatActivity() {
                 projectSub { openProjectWordsEditor() }
             }
             editorEntry("©️ Copyright",
-                if (settings.copyrightEnabled) "An · ${settings.copyrightAuthor} · ${settings.copyrightText}" else "Aus") {
+                if (settings.copyrightEnabled) "An · ${settings.copyrightAuthor} · ${settings.copyrightText}" else "Aus",
+                QuickToggle({ settings.copyrightEnabled }, ::setCopyrightEnabled)) {
                 projectSub { openCopyrightEditor() }
             }
         }
@@ -1305,7 +1370,7 @@ class MainActivity : AppCompatActivity() {
                 text = "An jedes Video dieses Projekts anhängen"
                 setTextColor(Color.WHITE)
                 isChecked = settings.introOutroEnabled
-                setOnCheckedChangeListener { _, c -> settings.introOutroEnabled = c }
+                setOnCheckedChangeListener { _, c -> setIntroOutroEnabled(c) }
             })
             if (settings.timeLimit > 0) editorContent.addView(uiText(
                 "Zeitlimit aktiv: Intro und Outro werden von der Aufnahmezeit abgezogen (jetzt ${effectiveLimit()} s Aufnahme).",
@@ -1602,7 +1667,7 @@ class MainActivity : AppCompatActivity() {
                 text = "Autor und Copyright in jedes Foto schreiben"
                 setTextColor(Color.WHITE)
                 isChecked = settings.copyrightEnabled
-                setOnCheckedChangeListener { _, c -> settings.copyrightEnabled = c }
+                setOnCheckedChangeListener { _, c -> setCopyrightEnabled(c) }
             })
             uiField("Autor", settings.copyrightAuthor) { settings.copyrightAuthor = it }
             uiField("Copyright", settings.copyrightText) { settings.copyrightText = it }
@@ -3066,7 +3131,7 @@ class MainActivity : AppCompatActivity() {
                 text = "Bauchbinde bei Videos einblenden"
                 setTextColor(Color.WHITE)
                 isChecked = settings.lowerEnabled
-                setOnCheckedChangeListener { _, c -> settings.lowerEnabled = c; updateUi() }
+                setOnCheckedChangeListener { _, c -> setLowerEnabled(c, preview = false) }
             })
             uiSection("Text")
             uiField("Name", settings.lowerName) { settings.lowerName = it; applyLowerThird() }
@@ -3145,10 +3210,7 @@ class MainActivity : AppCompatActivity() {
                 text = "Untertitel automatisch erkennen"
                 setTextColor(Color.WHITE)
                 isChecked = settings.subtitlesEnabled
-                setOnCheckedChangeListener { _, c ->
-                    settings.subtitlesEnabled = c
-                    if (c && !Subtitles.isModelReady(this@MainActivity, settings.subtitleLang, settings.subtitleEngine)) toast("Bitte zuerst das Sprachmodell laden")
-                }
+                setOnCheckedChangeListener { _, c -> setSubtitlesEnabled(c) }
             })
             uiSection("Sprache")
             val langs = Subtitles.LANGUAGES
