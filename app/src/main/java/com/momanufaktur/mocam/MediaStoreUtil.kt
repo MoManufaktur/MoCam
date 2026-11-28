@@ -64,7 +64,9 @@ object MediaStoreUtil {
         logo: Bitmap?,
         cx: Float, cy: Float, w: Float, alpha: Float,
         mirror: Boolean = false,
-        fix: Int = 0
+        fix: Int = 0,
+        /** z. B. Hintergrund ersetzen – am aufrechten, gefilterten Bild, vor dem Logo */
+        post: ((Bitmap) -> Bitmap)? = null
     ): Uri? {
         val decoded = BitmapFactory.decodeFile(src.path) ?: return null
 
@@ -89,14 +91,18 @@ object MediaStoreUtil {
         m.mapRect(bounds)
         m.postTranslate(-bounds.left, -bounds.top)
 
-        val out = Bitmap.createBitmap(
+        var out = Bitmap.createBitmap(
             Math.round(bounds.width()), Math.round(bounds.height()), Bitmap.Config.ARGB_8888
         )
-        val canvas = Canvas(out)
+        var canvas = Canvas(out)
         val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
         if (!filter.isIdentity) paint.colorFilter = ColorMatrixColorFilter(filter.toColorMatrix())
         canvas.drawBitmap(decoded, m, paint)
         decoded.recycle()
+        if (post != null) {
+            out = post(out)
+            canvas = Canvas(out)
+        }
 
         if (logo != null) {
             val lw = w * out.width

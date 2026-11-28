@@ -58,6 +58,7 @@ object Backup {
             z.closeEntry()
             for (f in logoFiles(ctx)) { add(z, "files/logos/${f.name}", f); count++ }
             for (f in clipFiles(ctx)) { add(z, "files/${f.name}", f); count++ }
+            File(ctx.filesDir, "bg").listFiles { f -> f.isFile }?.forEach { add(z, "files/bg/${it.name}", it); count++ }
         }
         return count
     }
@@ -99,6 +100,7 @@ object Backup {
         // Alte Dateien ersetzen
         File(ctx.filesDir, "logos").deleteRecursively()
         clipFiles(ctx).forEach { it.delete() }
+        File(ctx.filesDir, "bg").deleteRecursively()
         staging.walkTopDown().filter { it.isFile }.forEach { f ->
             val rel = f.relativeTo(staging).path
             val dst = File(ctx.filesDir, rel)

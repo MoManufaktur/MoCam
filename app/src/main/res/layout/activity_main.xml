@@ -123,6 +123,7 @@
                 <TextView android:id="@+id/btnFlash" style="@style/TopChip" />
                 <TextView android:id="@+id/btnLight" style="@style/TopChip" android:visibility="gone" />
                 <TextView android:id="@+id/btnPrompter" style="@style/TopChip" />
+                <TextView android:id="@+id/btnBackground" style="@style/TopChip" />
                 <TextView android:id="@+id/btnPro" style="@style/TopChip" />
                 <TextView android:id="@+id/btnInterval" style="@style/TopChip" />
                 <TextView android:id="@+id/btnBracket" style="@style/TopChip" />

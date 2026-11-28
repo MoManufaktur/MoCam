@@ -175,6 +175,28 @@ class Settings(ctx: Context) {
         p.edit().putString("clipName_$kind$ps", name).apply()
     }
 
+    // ---- Hintergrund ersetzen (global, eigenes Menü) ----
+    var bgEnabled: Boolean
+        get() = bool("bgEnabled", false)
+        set(v) = p.edit().putBoolean("bgEnabled", v).apply()
+    /** 1 = weichzeichnen, 2 = Foto, 3 = Video */
+    var bgType: Int
+        get() = int("bgType", 1)
+        set(v) = p.edit().putInt("bgType", v).apply()
+    var bgBlur: Float
+        get() = float("bgBlur", 0.5f)
+        set(v) = p.edit().putFloat("bgBlur", v).apply()
+    var maskFix: Int
+        get() = int("maskFix", 0)
+        set(v) = p.edit().putInt("maskFix", v).apply()
+    var bgImageName: String
+        get() = p.getString("bgImageName", "") ?: ""
+        set(v) = p.edit().putString("bgImageName", v).apply()
+    var bgVideoName: String
+        get() = p.getString("bgVideoName", "") ?: ""
+        set(v) = p.edit().putString("bgVideoName", v).apply()
+    val bgModeNow: Int get() = if (bgEnabled) bgType else 0
+
     /** Ringlicht automatisch regeln */
     var lightAuto: Boolean
         get() = bool("lightAuto", true)

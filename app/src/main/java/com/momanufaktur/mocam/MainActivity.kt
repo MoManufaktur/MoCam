@@ -100,6 +100,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnGrid: TextView
     private lateinit var btnZebra: TextView
     private lateinit var btnPro: TextView
+    private lateinit var btnBackground: TextView
     private lateinit var btnLight: TextView
     private lateinit var btnInterval: TextView
     private lateinit var btnBracket: TextView
@@ -434,6 +435,8 @@ class MainActivity : AppCompatActivity() {
         logoAlphaBar = findViewById(R.id.logoAlphaBar)
         logoLibrary = findViewById(R.id.logoLibrary)
         btnPrompter = findViewById(R.id.btnPrompter)
+        btnBackground = findViewById(R.id.btnBackground)
+        btnBackground.setOnClickListener { setBackgroundEnabled(!settings.bgEnabled) }
         prompterBox = findViewById(R.id.prompterBox)
         prompterView = findViewById(R.id.prompterView)
         prompterSpeed = findViewById(R.id.prompterSpeed)
@@ -729,6 +732,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupPrompter()
+        fxState.segmenter = Background.liveSegmenter()
+        applyBackground()
         updateUi()
     }
 
@@ -1071,6 +1076,12 @@ class MainActivity : AppCompatActivity() {
             openSubtitleEditor()
         }
 
+        // Hintergrund ersetzen
+        entry("🖼 Hintergrund", (if (settings.bgEnabled) "An · " else "Aus · ") +
+            listOf("", "Weichzeichnen", "Foto", "Video")[settings.bgType.coerceIn(1, 3)]) {
+            openBackgroundEditor()
+        }
+
         // 3. Mikrofon
         entry("🎤 Mikrofon",
             if (settings.micMode == "bluetooth") "Bluetooth-Headset" else "Automatisch (intern / USB)") {
@@ -1396,6 +1407,122 @@ class MainActivity : AppCompatActivity() {
                 applyCameraFixes()
                 flipText.text = "Video-Bild: " + if (v) "gespiegelt" else "normal"
             }, wrapLp(0))
+        }
+    }
+
+    // ---------------- Hintergrund ersetzen ----------------
+    private val pickBgImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) importBg(uri, Background.imageFile(this), true)
+    }
+    private val pickBgVideo = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) importBg(uri, Background.videoFile(this), false)
+    }
+
+    private fun importBg(uri: Uri, target: File, image: Boolean) {
+        toast("Hintergrund wird übernommen …")
+        bg.execute {
+            val name = try {
+                contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            } catch (_: Exception) { null } ?: if (image) "Foto" else "Video"
+            val ok = try {
+                contentResolver.openInputStream(uri)?.use { inp -> target.outputStream().use { inp.copyTo(it) } } != null
+            } catch (e: Exception) { Log.w(TAG, "Hintergrund", e); false }
+            runOnUiThread {
+                if (!ok) { toast("Datei konnte nicht übernommen werden"); return@runOnUiThread }
+                if (image) { settings.bgImageName = name; settings.bgType = 2 } else { settings.bgVideoName = name; settings.bgType = 3 }
+                settings.bgEnabled = true
+                applyBackground()
+                updateUi()
+                if (editorPanel.visibility == View.VISIBLE) openBackgroundEditor()
+            }
+        }
+    }
+
+    private fun setBackgroundEnabled(on: Boolean) {
+        settings.bgEnabled = on
+        if (on && !effectActive) toast("Live-Hintergrund wird in diesem Modus nicht unterstützt")
+        applyBackground()
+        updateUi()
+    }
+
+    /** Einstellungen an die Kamera-Pipeline übergeben (Foto/Video laden, Maske zurücksetzen). */
+    private fun applyBackground() {
+        fxState.bgBlur = settings.bgBlur
+        fxState.maskFix = settings.maskFix
+        val mode = settings.bgModeNow
+        if (mode == 0) { fxState.bgMode = 0; return }
+        if (mode == 2) {
+            bg.execute {
+                val b = Background.loadImage(Background.imageFile(this))
+                runOnUiThread {
+                    fxState.bgImage = b
+                    fxState.bgImageGen++
+                    fxState.bgMode = if (settings.bgModeNow == 2) 2 else settings.bgModeNow
+                    if (b == null) toast("Noch kein Hintergrund-Foto gewählt")
+                }
+            }
+        } else {
+            if (mode == 3) {
+                val f = Background.videoFile(this)
+                fxState.bgVideoPath = if (f.exists()) f.path else null
+                fxState.bgVideoGen++
+                if (!f.exists()) toast("Noch kein Hintergrund-Video gewählt")
+            }
+            fxState.bgMode = mode
+        }
+    }
+
+    private fun openBackgroundEditor() {
+        openEditor("🖼 Hintergrund") {
+            editorContent.addView(uiText(
+                "Ersetzt den Hintergrund hinter dir – live in der Vorschau, im Video und im Foto. Funktioniert am besten " +
+                    "mit einer Person nah an der Kamera (0,5–2 m) und gutem Licht.", 12f, Color.argb(200, 255, 255, 255)))
+            editorContent.addView(SwitchCompat(this).apply {
+                text = "Hintergrund ersetzen"
+                setTextColor(Color.WHITE)
+                isChecked = settings.bgEnabled
+                setOnCheckedChangeListener { _, c -> setBackgroundEnabled(c) }
+            })
+            uiSection("Art")
+            uiChoice(listOf("🌫 Weichzeichnen", "🖼 Foto", "🎞 Video"), settings.bgType - 1) { i ->
+                settings.bgType = i + 1
+                applyBackground(); updateUi()
+                openBackgroundEditor()
+            }
+            when (settings.bgType) {
+                1 -> uiSlider("Stärke", 0f, 1f, settings.bgBlur) { v -> settings.bgBlur = v; fxState.bgBlur = v }
+                2 -> {
+                    val has = Background.imageFile(this).exists()
+                    editorContent.addView(uiText("Foto: " + if (has) settings.bgImageName.ifEmpty { "gewählt" } else "– keins gewählt –",
+                        13f, if (has) Color.WHITE else Color.argb(160, 255, 255, 255)).apply { setPadding(0, dp(6), 0, 0) })
+                    editorContent.addView(uiChip(if (has) "Foto ändern …" else "Foto wählen …") { pickBgImage.launch("image/*") }, wrapLp(0))
+                }
+                3 -> {
+                    val f = Background.videoFile(this)
+                    val has = f.exists()
+                    editorContent.addView(uiText("Video: " + if (has) settings.bgVideoName.ifEmpty { "gewählt" } else "– keins gewählt –",
+                        13f, if (has) Color.WHITE else Color.argb(160, 255, 255, 255)).apply { setPadding(0, dp(6), 0, 0) })
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, 0) }
+                    if (has) row.addView(uiChip("▶ Abspielen") { playClip(f, "Hintergrund-Video") }, wrapLp(6))
+                    row.addView(uiChip(if (has) "Video ändern …" else "Video wählen …") { pickBgVideo.launch("video/*") }, wrapLp(0))
+                    editorContent.addView(row)
+                    editorContent.addView(uiText("Läuft ohne Ton in Schleife hinter dir. Im Foto erscheint ein Standbild daraus.",
+                        11f, Color.argb(170, 255, 255, 255)))
+                }
+            }
+            uiSection("Falls der Hintergrund falsch sitzt")
+            editorContent.addView(uiText("Liegt die Freistellung verdreht oder gespiegelt neben dir, hier die Ausrichtung der " +
+                "Erkennung ändern (wie bei den Grundeinstellungen).", 11f, Color.argb(170, 255, 255, 255)))
+            val fixText = uiText("Ausrichtung: " + fixLabel(settings.maskFix), 13f)
+            editorContent.addView(fixText)
+            val fr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            fun setFix(v: Int) { settings.maskFix = v; fxState.maskFix = v; fixText.text = "Ausrichtung: " + fixLabel(v) }
+            fr.addView(uiChip("↻ 90°") { val v = settings.maskFix; setFix((v / 4) * 4 + (v % 4 + 1) % 4) }, wrapLp(6))
+            fr.addView(uiChip("⇋ Spiegeln") { setFix((settings.maskFix + 4) % 8) }, wrapLp(6))
+            fr.addView(uiChip("Zurücksetzen") { setFix(0) }, wrapLp(0))
+            editorContent.addView(fr)
         }
     }
 
@@ -1842,7 +1969,9 @@ class MainActivity : AppCompatActivity() {
         // Drehen/Spiegeln macht MoCam selbst am fertigen Foto (Grundeinstellung + Frontkamera-Spiegel)
         val mirror = isFrontCam && settings.frontMirror
         val photoFix = 0
-        val needsProcessing = !filter.isIdentity || logo != null || mirror || photoFix != 0
+        val bgMode = settings.bgModeNow
+        val bgBlur = settings.bgBlur
+        val needsProcessing = !filter.isIdentity || logo != null || mirror || photoFix != 0 || bgMode > 0
         val meta = ImageCapture.Metadata().apply { isReversedHorizontal = false }
 
         if (!quiet) flashScreen()
@@ -1875,7 +2004,8 @@ class MainActivity : AppCompatActivity() {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     bg.execute {
                         val uri = try {
-                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a, mirror, photoFix)
+                            MediaStoreUtil.processAndSavePhoto(this@MainActivity, tmp, filter, logo, cx, cy, w, a, mirror, photoFix,
+                                post = if (bgMode > 0) { b -> Background.replaceInPhoto(this@MainActivity, b, bgMode, bgBlur) } else null)
                         } catch (t: Throwable) {
                             Log.e(TAG, "Fotoverarbeitung", t)
                             null
@@ -4301,6 +4431,7 @@ class MainActivity : AppCompatActivity() {
         // Frontkamera: nur 💡 Licht (Display als Ringlicht) · Rückkamera: nur ⚡ Blitz / 🔦 Taschenlampe
         // Frontkamera: 💡 Ringlicht (Display) · Rückkamera: 🔦 Kameralicht + ⚡ Blitz (nur Foto)
         btnLight.visibility = if (isFrontCam || hasTorch()) View.VISIBLE else View.GONE
+        btnBackground.text = if (settings.bgEnabled) "🖼 Hintergrund an" else "🖼 Hintergrund aus"
         btnFlash.visibility = if (isFrontCam || videoMode) View.GONE else View.VISIBLE
         btnLight.text = if (isFrontCam) { if (lightMode) "💡 Licht an" else "💡 Licht" }
             else if (torchOn) "🔦 Licht an" else "🔦 Licht aus"

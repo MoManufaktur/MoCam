@@ -66,6 +66,27 @@ class FxState {
     @Volatile var timelapseFactor = 0
     @Volatile var timelapseActive = false
     @Volatile var timelapseGen = 0
+
+    // ---- Hintergrund ersetzen (wie Zoom) ----
+    /** 0 = aus, 1 = weichzeichnen, 2 = Foto, 3 = Video */
+    @Volatile var bgMode = 0
+    /** Stärke des Weichzeichners 0..1 */
+    @Volatile var bgBlur = 0.5f
+    /** Ausrichtung der Personen-Maske (0..7, wie die Grundeinstellung) – nur falls sie auf einem Gerät falsch sitzt */
+    @Volatile var maskFix = 0
+    @Volatile var bgImage: android.graphics.Bitmap? = null
+    @Volatile var bgImageGen = 0
+    @Volatile var bgVideoPath: String? = null
+    @Volatile var bgVideoGen = 0
+    /** Personen-Maske (1 Byte je Pixel, 255 = Person), Zeilen von oben nach unten im aufrechten Bild */
+    @Volatile var mask: ByteBuffer? = null
+    @Volatile var maskW = 0
+    @Volatile var maskH = 0
+    @Volatile var maskGen = 0
+    @Volatile var maskTime = 0L
+    val segBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Segmentierung (ML Kit), von der App gesetzt: Bild rein, Maske über Callback zurück (null = Fehler). */
+    @Volatile var segmenter: ((android.graphics.Bitmap, (ByteBuffer?, Int, Int) -> Unit) -> Unit)? = null
 }
 
 /**
@@ -110,6 +131,33 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
     private var uZebra = 0
     private var uPeak = 0
     private var uTexel = 0
+
+    // Hintergrund
+    private var uBgMode = 0
+    private var uMask = 0
+    private var uMaskFix = 0
+    private var uBgImg = 0
+    private var uBgVid = 0
+    private var uBgVidTex = 0
+    private var uBgScale = 0
+    private var uBlurR = 0
+    private var maskTex = 0
+    private var bgImgTex = 0
+    private var bgVidTex = 0
+    private var localMaskGen = -1
+    private var localImgGen = -1
+    private var bgImgAspect = 1f
+    private var localVidGen = -1
+    private var bgPlayer: android.media.MediaPlayer? = null
+    private var bgVidSt: SurfaceTexture? = null
+    private var bgVidSurface: Surface? = null
+    private var bgVidAspect = 1f
+    private val bgVidMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    private var segProgram = 0
+    private var segFbo = 0
+    private var segTex = 0
+    private var segW = 0
+    private var segH = 0
 
     // ---- EGL / GL ----
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -264,7 +312,9 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
                     it.surface.release()
                 }
                 input = null
+                releaseBgVideo()
                 GLES20.glDeleteProgram(program)
+                if (segProgram != 0) GLES20.glDeleteProgram(segProgram)
                 GLES20.glDeleteTextures(2, intArrayOf(logoTex, lowerTex), 0)
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 EGL14.eglDestroySurface(display, pbuffer)
@@ -310,6 +360,7 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
             }
         }
 
+        prepareBackground()
         for ((out, egl) in outputs) {
             if (!EGL14.eglMakeCurrent(display, egl, egl, context)) continue
             out.updateTransformMatrix(addMatrix, identity)
@@ -318,6 +369,151 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
             EGLExt.eglPresentationTimeANDROID(display, egl, timestamp)
             EGL14.eglSwapBuffers(display, egl)
         }
+        maybeSegment(holder)
+    }
+
+    // ------------------------------------------------------------------
+    // Hintergrund ersetzen
+    // ------------------------------------------------------------------
+
+    /** Maske, Foto und Video-Hintergrund bei Änderung hochladen (GL-Thread, Pbuffer aktiv). */
+    private fun prepareBackground() {
+        if (state.bgMode == 0) {
+            if (bgPlayer != null) releaseBgVideo()
+            return
+        }
+        if (localMaskGen != state.maskGen) {
+            localMaskGen = state.maskGen
+            val m = state.mask
+            if (m != null && state.maskW > 0 && state.maskH > 0) {
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+                GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
+                m.position(0)
+                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, state.maskW, state.maskH, 0,
+                    GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, m)
+            }
+        }
+        if (localImgGen != state.bgImageGen) {
+            localImgGen = state.bgImageGen
+            val b = state.bgImage
+            if (b != null && !b.isRecycled) {
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgImgTex)
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, b, 0)
+                bgImgAspect = b.width.toFloat() / b.height
+            }
+        }
+        if (state.bgMode == 3) {
+            if (localVidGen != state.bgVideoGen || bgPlayer == null) {
+                localVidGen = state.bgVideoGen
+                releaseBgVideo()
+                state.bgVideoPath?.let { startBgVideo(it) }
+            }
+            try { bgVidSt?.updateTexImage(); bgVidSt?.getTransformMatrix(bgVidMatrix) } catch (_: Exception) { }
+        } else if (bgPlayer != null) releaseBgVideo()
+    }
+
+    private fun startBgVideo(path: String) {
+        try {
+            val st = SurfaceTexture(bgVidTex)
+            val surface = Surface(st)
+            val p = android.media.MediaPlayer()
+            p.setDataSource(path)
+            p.setSurface(surface)
+            p.isLooping = true
+            p.setVolume(0f, 0f)
+            p.prepare()
+            if (p.videoHeight > 0) bgVidAspect = p.videoWidth.toFloat() / p.videoHeight
+            p.start()
+            bgPlayer = p; bgVidSt = st; bgVidSurface = surface
+        } catch (e: Exception) {
+            Log.w(TAG, "Hintergrund-Video", e)
+        }
+    }
+
+    private fun releaseBgVideo() {
+        try { bgPlayer?.release() } catch (_: Exception) { }
+        bgPlayer = null
+        bgVidSurface?.release(); bgVidSurface = null
+        bgVidSt?.release(); bgVidSt = null
+    }
+
+    /**
+     * Etwa 15-mal pro Sekunde ein kleines, aufrechtes Bild (ca. 144×256) für die Personen-Erkennung
+     * erzeugen. Der Prozessor, der gerade läuft, übernimmt das (Vorschau oder Video).
+     */
+    private fun maybeSegment(holder: Input) {
+        val seg = state.segmenter ?: return
+        if (state.bgMode == 0) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - state.maskTime < 66) return
+        if (!state.segBusy.compareAndSet(false, true)) return
+        makeCurrentPbuffer()
+        val rot = ((rotationDegrees % 360) + 360) % 360
+        val portrait = (rot == 90 || rot == 270) == (holder.w >= holder.h)
+        val long = 256
+        val shortSide = (long * minOf(holder.w, holder.h).toFloat() / maxOf(holder.w, holder.h)).toInt().coerceAtLeast(16)
+        val w = if (portrait) shortSide else long
+        val h = if (portrait) long else shortSide
+        if (segFbo == 0 || segW != w || segH != h) createSegFbo(w, h)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, segFbo)
+        GLES20.glViewport(0, 0, w, h)
+        GLES20.glUseProgram(segProgram)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, holder.tex)
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(segProgram, "uCam"), 0)
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(segProgram, "uTex"), 1, false, stMatrix, 0)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(segProgram, "uRot"), rot.toFloat())
+        val sPos = GLES20.glGetAttribLocation(segProgram, "aPos")
+        val sUv = GLES20.glGetAttribLocation(segProgram, "aUv")
+        GLES20.glEnableVertexAttribArray(sPos)
+        GLES20.glVertexAttribPointer(sPos, 2, GLES20.GL_FLOAT, false, 0, quadPos)
+        GLES20.glEnableVertexAttribArray(sUv)
+        GLES20.glVertexAttribPointer(sUv, 2, GLES20.GL_FLOAT, false, 0, quadUv)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(sPos)
+        GLES20.glDisableVertexAttribArray(sUv)
+        val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
+        GLES20.glReadPixels(0, 0, w, h, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        // Bitmap bauen (Zeilen von unten nach oben → umdrehen) und erkennen lassen
+        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        buf.position(0)
+        bmp.copyPixelsFromBuffer(buf)
+        val upright = android.graphics.Bitmap.createBitmap(bmp, 0, 0, w, h,
+            android.graphics.Matrix().apply { postScale(1f, -1f) }, false)
+        bmp.recycle()
+        try {
+            seg(upright) { m, mw, mh ->
+                if (m != null) {
+                    state.mask = m; state.maskW = mw; state.maskH = mh; state.maskGen++
+                }
+                state.maskTime = android.os.SystemClock.uptimeMillis()
+                state.segBusy.set(false)
+            }
+        } catch (e: Exception) {
+            state.segBusy.set(false)
+        }
+    }
+
+    private fun createSegFbo(w: Int, h: Int) {
+        if (segFbo != 0) {
+            GLES20.glDeleteFramebuffers(1, intArrayOf(segFbo), 0)
+            GLES20.glDeleteTextures(1, intArrayOf(segTex), 0)
+        }
+        val t = IntArray(1)
+        GLES20.glGenTextures(1, t, 0)
+        segTex = t[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, segTex)
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        val f = IntArray(1)
+        GLES20.glGenFramebuffers(1, f, 0)
+        segFbo = f[0]
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, segFbo)
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, segTex, 0)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        segW = w; segH = h
     }
 
     private fun draw(holder: Input, out: SurfaceOutput) {
@@ -337,6 +533,39 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
 
         GLES20.glUniformMatrix4fv(uTex, 1, false, stMatrix, 0)
         GLES20.glUniformMatrix4fv(uAdd, 1, false, addMatrix, 0)
+
+        // Hintergrund
+        val bgMode = state.bgMode
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTex)
+        GLES20.glUniform1i(uMask, 3)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgImgTex)
+        GLES20.glUniform1i(uBgImg, 4)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE5)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, bgVidTex)
+        GLES20.glUniform1i(uBgVid, 5)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        val effMode = when {
+            bgMode == 2 && state.bgImage == null -> 0
+            bgMode == 3 && bgPlayer == null -> 0
+            else -> bgMode
+        }
+        GLES20.glUniform1f(uBgMode, effMode.toFloat())
+        GLES20.glUniform1f(uMaskFix, state.maskFix.toFloat())
+        GLES20.glUniformMatrix4fv(uBgVidTex, 1, false, bgVidMatrix, 0)
+        GLES20.glUniform1f(uBlurR, 4f + 40f * state.bgBlur)
+        run {
+            // Hintergrund formatfüllend (wie „cover“) über das aufrechte Ausgabebild legen
+            val fx = if (burnLogo) videoFix else 0
+            val d00 = dih(0f, 1f, fx); val d10 = dih(1f, 1f, fx)
+            val alongX = abs(d10[0] - d00[0]) >= abs(d10[1] - d00[1])
+            val ow = if (alongX) out.size.width else out.size.height
+            val oh = if (alongX) out.size.height else out.size.width
+            val a = ow.toFloat() / oh
+            val b = if (effMode == 3) bgVidAspect else bgImgAspect
+            if (b > a) GLES20.glUniform2f(uBgScale, a / b, 1f) else GLES20.glUniform2f(uBgScale, 1f, b / a)
+        }
 
         val f = filter
         f.columnMajor(colorCm)
@@ -514,7 +743,35 @@ class GlEffectProcessor(private val state: FxState, private val burnLogo: Boolea
         uZebra = GLES20.glGetUniformLocation(program, "uZebra")
         uPeak = GLES20.glGetUniformLocation(program, "uPeak")
         uTexel = GLES20.glGetUniformLocation(program, "uTexel")
+        uBgMode = GLES20.glGetUniformLocation(program, "uBgMode")
+        uMask = GLES20.glGetUniformLocation(program, "uMask")
+        uMaskFix = GLES20.glGetUniformLocation(program, "uMaskFix")
+        uBgImg = GLES20.glGetUniformLocation(program, "uBgImg")
+        uBgVid = GLES20.glGetUniformLocation(program, "uBgVid")
+        uBgVidTex = GLES20.glGetUniformLocation(program, "uBgVidTex")
+        uBgScale = GLES20.glGetUniformLocation(program, "uBgScale")
+        uBlurR = GLES20.glGetUniformLocation(program, "uBlurR")
+        maskTex = newTex2D()
+        // Startwert: überall „Person“ → Bild bleibt unverändert, bis die erste Maske da ist
+        val white = ByteBuffer.allocateDirect(1).order(ByteOrder.nativeOrder()).put(0, 255.toByte())
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, 1, 1, 0, GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, white)
+        bgImgTex = newTex2D()
+        uploadTransparentPixel()
+        bgVidTex = createOesTexture()
+        segProgram = buildProgram(VERTEX_SHADER, SEG_SHADER)
         glReady = program != 0
+    }
+
+    private fun newTex2D(): Int {
+        val t = IntArray(1)
+        GLES20.glGenTextures(1, t, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, t[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        return t[0]
     }
 
     private fun uploadTransparentPixel() {
@@ -599,6 +856,29 @@ void main() {
 }
 """
 
+        /** Kleines aufrechtes Bild für die Personen-Erkennung (gleiche Sensor-Umrechnung wie unten). */
+        private const val SEG_SHADER = """#extension GL_OES_EGL_image_external : require
+precision mediump float;
+varying vec2 vS;
+varying vec2 vSm;
+varying vec2 vUv;
+uniform samplerExternalOES uCam;
+uniform mat4 uTex;
+uniform float uRot;
+vec2 toSensor(vec2 p) {
+    vec2 img = p;
+    if (uRot > 45.0 && uRot < 135.0) img = vec2(p.y, 1.0 - p.x);
+    else if (uRot >= 135.0 && uRot < 225.0) img = vec2(1.0 - p.x, 1.0 - p.y);
+    else if (uRot >= 225.0) img = vec2(1.0 - p.y, p.x);
+    return vec2(1.0 - img.x, img.y);
+}
+void main() {
+    vec2 p = vec2(vUv.x, 1.0 - vUv.y);
+    vec2 tc = (uTex * vec4(toSensor(p), 0.0, 1.0)).xy;
+    gl_FragColor = vec4(texture2D(uCam, tc).rgb, 1.0);
+}
+"""
+
         private const val FRAGMENT_SHADER = """#extension GL_OES_EGL_image_external : require
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -627,6 +907,14 @@ uniform float uLowerAlpha;
 uniform float uZebra;
 uniform float uPeak;
 uniform vec2 uTexel;
+uniform float uBgMode;
+uniform sampler2D uMask;
+uniform float uMaskFix;
+uniform sampler2D uBgImg;
+uniform samplerExternalOES uBgVid;
+uniform mat4 uBgVidTex;
+uniform vec2 uBgScale;
+uniform float uBlurR;
 
 // Sensor-Koordinate -> aufrechtes Bild (auf dem Mate 20 Pro ermittelt)
 vec2 toUpright(vec2 s) {
@@ -677,6 +965,26 @@ void main() {
 
     vec3 c = texture2D(uCam, tc).rgb;
     c = clamp(uColor * c + uOff, 0.0, 1.0);
+    // Hintergrund ersetzen: Personen-Maske (aufrechtes Bild) -> Kamera vorn, Ersatz dahinter
+    if (uBgMode > 0.5) {
+        float m = texture2D(uMask, dih(toUpright(sCam), uMaskFix)).r;
+        m = smoothstep(0.35, 0.75, m);
+        vec3 bg;
+        if (uBgMode < 1.5) {
+            vec3 acc = vec3(0.0);
+            for (int i = 0; i < 12; i++) {
+                float an = float(i) * 0.5236;
+                vec2 o = vec2(cos(an), sin(an)) * uTexel * uBlurR;
+                acc += texture2D(uCam, tc + o).rgb + texture2D(uCam, tc + o * 0.5).rgb;
+            }
+            bg = clamp(uColor * (acc / 24.0) + uOff, 0.0, 1.0);
+        } else {
+            vec2 bu = (d - 0.5) * uBgScale + 0.5;
+            if (uBgMode < 2.5) bg = texture2D(uBgImg, bu).rgb;
+            else bg = texture2D(uBgVid, (uBgVidTex * vec4(bu.x, 1.0 - bu.y, 0.0, 1.0)).xy).rgb;
+        }
+        c = mix(bg, c, m);
+    }
     // #3 Fokus-Peaking: scharfe Kanten rot markieren (nur Anzeige)
     if (uPeak > 0.5) {
         vec3 w = vec3(0.299, 0.587, 0.114);

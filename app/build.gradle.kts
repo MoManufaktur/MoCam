@@ -91,4 +91,6 @@ dependencies {
     // #9 Offline-Spracherkennung
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    // Hintergrund ersetzen: Personen-Erkennung (Modell in der App, offline)
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 }
