@@ -228,6 +228,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Logo austauschen: neues Bild unter demselben Dateinamen → Projekt-Einstellungen bleiben erhalten. */
     private var replaceTarget: File? = null
+    /** Projekt kopieren: Einstellungen dieses Logos gehen an das neu gewählte Logo. */
+    private var copyFromLogo: String? = null
+    private val pickCopyLogo =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            val from = copyFromLogo
+            copyFromLogo = null
+            if (uri != null && from != null) importLogo(uri, copyFrom = from)
+        }
     private val pickReplacement =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val t = replaceTarget
@@ -2204,7 +2212,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun importLogo(uri: Uri, replace: File? = null) {
+    private fun importLogo(uri: Uri, replace: File? = null, copyFrom: String? = null) {
         bg.execute {
             var savedName: String? = null
             val bmp = try {
@@ -2263,6 +2271,7 @@ class MainActivity : AppCompatActivity() {
                     toast("Logo konnte nicht geladen werden.")
                 } else {
                     if (replace != null) { anim = null; animName = null }  // alte Animation nicht weiterverwenden
+                    if (copyFrom != null) copyProjectData(copyFrom, savedName)
                     settings.selectedLogo = savedName
                     loadedLogoName = savedName
                     applyLogo(bmp)
@@ -2300,14 +2309,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Langer Druck auf ein Logo: austauschen oder löschen. */
+    /**
+     * Projektdaten kopieren: Einstellungen und Intro/Outro-Clips von [from] an das neue Logo [to]
+     * (das Logo-Bild selbst nicht). Der Ordner bleibt derselbe – im Speicherort-Menü änderbar.
+     */
+    private fun copyProjectData(from: String, to: String?) {
+        if (to == null || from == to) return
+        settings.copyProject(from, to)
+        val fk = from.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val tk = to.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        for (kind in listOf("intro", "outro")) {
+            val src = File(filesDir, "${kind}_$fk.mp4")
+            if (src.exists()) try { src.copyTo(File(filesDir, "${kind}_$tk.mp4"), overwrite = true) } catch (_: Exception) { }
+        }
+        toast("Projekt kopiert: Einstellungen, Bauchbinde, Intro/Outro, Texte von „${projectName(from)}“ übernommen")
+    }
+
+    /** Langer Druck auf ein Logo: austauschen, Projekt kopieren oder löschen. */
     private fun logoOptions(file: File) {
         MaterialAlertDialogBuilder(this)
             .setTitle("Logo bearbeiten")
-            .setItems(arrayOf("🔄 Logo austauschen (Projekt-Einstellungen bleiben)", "🗑 Logo löschen")) { _, which ->
+            .setItems(arrayOf("🔄 Logo austauschen (Projekt-Einstellungen bleiben)",
+                "📋 Projekt kopieren – neues Logo wählen", "🗑 Logo löschen")) { _, which ->
                 when (which) {
                     0 -> { replaceTarget = file; pickReplacement.launch("image/*") }
-                    1 -> confirmDeleteLogo(file)
+                    1 -> {
+                        copyFromLogo = file.name
+                        toast("Neues Logo wählen – alle Einstellungen von „${projectName(file.name)}“ werden übernommen")
+                        pickCopyLogo.launch("image/*")
+                    }
+                    2 -> confirmDeleteLogo(file)
                 }
             }
             .setNegativeButton("Abbrechen", null)
@@ -4137,7 +4168,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundResource(R.drawable.chip_light)
             setPadding(dp(14), dp(8), dp(14), dp(8))
-            elevation = dp(4).toFloat()
+            // keine Erhöhung: der Regler liegt unter den Menüs (Einstellungen usw.)
         }
         val label = TextView(this).apply {
             text = "💡 ${settings.lightLevel} %"
@@ -4184,7 +4215,8 @@ class MainActivity : AppCompatActivity() {
         bar.addView(close)
         val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM).apply { setMargins(dp(16), 0, dp(16), dp(8)) }
-        root.addView(bar, lp)
+        // direkt unter der unteren Leiste einsortieren → alle Menüs/Panels liegen darüber
+        root.addView(bar, root.indexOfChild(bottomPanel).let { if (it < 0) root.childCount else it }, lp)
         lightBar = bar
         // über der unteren Leiste platzieren (deren Höhe ändert sich je nach Modus)
         val place = { lp.bottomMargin = bottomPanel.height + dp(8); bar.layoutParams = lp }

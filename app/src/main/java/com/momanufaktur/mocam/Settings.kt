@@ -280,6 +280,30 @@ class Settings(ctx: Context) {
     fun folderForLogo(logoFile: String?): String =
         if (logoFile == null) "" else p.getString("logoFolder_$logoFile", "") ?: ""
 
+    /**
+     * Alle Projekt-Einstellungen eines Logos auf ein anderes übertragen (Position, Bauchbinde, Copyright,
+     * Intro/Outro-Schalter, Wortliste, Prompter-Text, Ordner …). Das Logo selbst wird nicht kopiert.
+     */
+    fun copyProject(from: String, to: String) {
+        val e = p.edit()
+        for ((k, v) in p.all) {
+            val nk = when {
+                k.endsWith("@$from") -> k.removeSuffix("@$from") + "@$to"
+                k == "logoFolder_$from" -> "logoFolder_$to"
+                else -> continue
+            }
+            when (v) {
+                is Boolean -> e.putBoolean(nk, v)
+                is Int -> e.putInt(nk, v)
+                is Long -> e.putLong(nk, v)
+                is Float -> e.putFloat(nk, v)
+                is String -> e.putString(nk, v)
+                is Set<*> -> e.putStringSet(nk, v.map { it.toString() }.toSet())
+            }
+        }
+        e.apply()
+    }
+
     fun setFolderForLogo(logoFile: String, folder: String) {
         p.edit().putString("logoFolder_$logoFile", folder).apply()
     }
